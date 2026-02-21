@@ -1,5 +1,14 @@
 # agentrun — Claude Code Project Guide
 
+## Library-First Mindset
+
+agentrun is a **public Go library** — not an application. Every decision must prioritize external consumers:
+
+- **Composability**: interfaces should be wrappable, decoratable, and mixable without friction. Consumers build their own orchestrators on top of agentrun primitives.
+- **Extensibility**: adding a custom backend (CLI or API) should require implementing 1–2 small interfaces, not understanding the whole codebase. No closed registries or internal-only extension points.
+- **Greenfield**: no backwards compatibility concerns. Design the best API possible without legacy shims or deprecation paths.
+- **Think like a library author**: exported API surface is a contract. Keep it small, intentional, and hard to misuse. Unexported internals can change freely.
+
 ## Build & Test Commands
 
 ```bash
