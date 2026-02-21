@@ -1,0 +1,245 @@
+package agentrun
+
+import (
+	"encoding/json"
+	"errors"
+	"testing"
+	"time"
+)
+
+func TestResolveOptions_Zero(t *testing.T) {
+	got := ResolveOptions()
+	if got.Prompt != "" || got.Model != "" || got.Timeout != 0 {
+		t.Fatalf("zero opts: want zero StartOptions, got %+v", got)
+	}
+}
+
+func TestResolveOptions_Single(t *testing.T) {
+	got := ResolveOptions(WithPrompt("single-prompt"))
+	if got.Prompt != "single-prompt" {
+		t.Fatalf("want Prompt=single-prompt, got %q", got.Prompt)
+	}
+	if got.Model != "" || got.Timeout != 0 {
+		t.Fatalf("other fields should be zero, got %+v", got)
+	}
+}
+
+func TestResolveOptions_LastWriterWins(t *testing.T) {
+	got := ResolveOptions(
+		WithPrompt("first"),
+		WithPrompt("second"),
+	)
+	if got.Prompt != "second" {
+		t.Fatalf("want last-writer-wins Prompt=second, got %q", got.Prompt)
+	}
+}
+
+func TestResolveOptions_NilOptionSkipped(t *testing.T) {
+	got := ResolveOptions(nil, WithModel("gpt-4"), nil)
+	if got.Model != "gpt-4" {
+		t.Fatalf("want Model=gpt-4, got %q", got.Model)
+	}
+}
+
+func TestWithPrompt(t *testing.T) {
+	got := ResolveOptions(WithPrompt("p"))
+	if got.Prompt != "p" {
+		t.Fatalf("want Prompt=p, got %q", got.Prompt)
+	}
+	if got.Model != "" || got.Timeout != 0 {
+		t.Fatal("WithPrompt should not set other fields")
+	}
+}
+
+func TestWithModel(t *testing.T) {
+	got := ResolveOptions(WithModel("m"))
+	if got.Model != "m" {
+		t.Fatalf("want Model=m, got %q", got.Model)
+	}
+	if got.Prompt != "" || got.Timeout != 0 {
+		t.Fatal("WithModel should not set other fields")
+	}
+}
+
+func TestWithTimeout(t *testing.T) {
+	got := ResolveOptions(WithTimeout(5 * time.Second))
+	if got.Timeout != 5*time.Second {
+		t.Fatalf("want Timeout=5s, got %v", got.Timeout)
+	}
+	if got.Prompt != "" || got.Model != "" {
+		t.Fatal("WithTimeout should not set other fields")
+	}
+}
+
+func TestResolveOptions_AllOptions(t *testing.T) {
+	got := ResolveOptions(
+		WithPrompt("all-prompt"),
+		WithModel("all-model"),
+		WithTimeout(10*time.Second),
+	)
+	if got.Prompt != "all-prompt" || got.Model != "all-model" || got.Timeout != 10*time.Second {
+		t.Fatalf("want all fields set, got %+v", got)
+	}
+}
+
+func TestSentinelErrors_Identity(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{"ErrUnavailable", ErrUnavailable},
+		{"ErrTerminated", ErrTerminated},
+		{"ErrSessionNotFound", ErrSessionNotFound},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !errors.Is(tt.err, tt.err) {
+				t.Fatalf("errors.Is(%v, %v) should be true", tt.name, tt.name)
+			}
+		})
+	}
+}
+
+func TestSentinelErrors_Wrapping(t *testing.T) {
+	tests := []struct {
+		name     string
+		sentinel error
+	}{
+		{"ErrUnavailable", ErrUnavailable},
+		{"ErrTerminated", ErrTerminated},
+		{"ErrSessionNotFound", ErrSessionNotFound},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			//nolint:errorlint // testing fmt.Errorf wrapping intentionally
+			wrapped := errors.Join(errors.New("context"), tt.sentinel)
+			if !errors.Is(wrapped, tt.sentinel) {
+				t.Fatalf("wrapped error should match %v via errors.Is", tt.name)
+			}
+		})
+	}
+}
+
+func TestSentinelErrors_Distinct(t *testing.T) {
+	if errors.Is(ErrUnavailable, ErrTerminated) {
+		t.Fatal("ErrUnavailable should not match ErrTerminated")
+	}
+	if errors.Is(ErrUnavailable, ErrSessionNotFound) {
+		t.Fatal("ErrUnavailable should not match ErrSessionNotFound")
+	}
+	if errors.Is(ErrTerminated, ErrSessionNotFound) {
+		t.Fatal("ErrTerminated should not match ErrSessionNotFound")
+	}
+}
+
+func TestMessageJSON_Full(t *testing.T) {
+	ts := time.Date(2025, 1, 15, 10, 30, 0, 0, time.UTC)
+	msg := Message{
+		Type:    MessageText,
+		Content: "hi there",
+		Tool: &ToolCall{
+			Name:  "read_file",
+			Input: json.RawMessage(`{"path":"foo.go"}`),
+		},
+		Usage:     &Usage{InputTokens: 100, OutputTokens: 50},
+		Raw:       json.RawMessage(`{"raw":true}`),
+		RawLine:   "original line",
+		Timestamp: ts,
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var got Message
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if got.Type != MessageText {
+		t.Errorf("Type: want %q, got %q", MessageText, got.Type)
+	}
+	if got.Content != "hi there" {
+		t.Errorf("Content: want 'hi there', got %q", got.Content)
+	}
+	if got.Tool == nil || got.Tool.Name != "read_file" {
+		t.Errorf("Tool.Name: want read_file, got %v", got.Tool)
+	}
+	if got.Usage == nil || got.Usage.InputTokens != 100 || got.Usage.OutputTokens != 50 {
+		t.Errorf("Usage: want {100,50}, got %v", got.Usage)
+	}
+	if got.RawLine != "original line" {
+		t.Errorf("RawLine: want 'original line', got %q", got.RawLine)
+	}
+	if !got.Timestamp.Equal(ts) {
+		t.Errorf("Timestamp: want %v, got %v", ts, got.Timestamp)
+	}
+}
+
+func TestMessageJSON_Minimal(t *testing.T) {
+	msg := Message{Type: MessageEOF}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	// Verify omitempty fields are absent.
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal raw: %v", err)
+	}
+
+	if _, ok := raw["type"]; !ok {
+		t.Error("type field should be present")
+	}
+	// Timestamp is always present (time.Time is not omitempty-compatible).
+	for _, key := range []string{"content", "tool", "usage", "raw", "raw_line"} {
+		if _, ok := raw[key]; ok {
+			t.Errorf("field %q should be omitted on minimal message", key)
+		}
+	}
+}
+
+func TestSessionJSON_RoundTrip(t *testing.T) {
+	s := Session{
+		ID:      "s1",
+		AgentID: "agent-1",
+		CWD:     "/tmp",
+		Model:   "claude",
+		Prompt:  "greet me",
+		Options: map[string]string{"mode": "auto"},
+	}
+
+	data, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var got Session
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if got.ID != s.ID || got.AgentID != s.AgentID || got.CWD != s.CWD {
+		t.Errorf("identity fields mismatch: got %+v", got)
+	}
+	if got.Options["mode"] != "auto" {
+		t.Errorf("Options[mode]: want auto, got %q", got.Options["mode"])
+	}
+}
+
+func TestSessionOptions_MapAliasing(t *testing.T) {
+	original := Session{
+		ID:      "s1",
+		Options: map[string]string{"key": "val"},
+	}
+	copied := original
+	copied.Options["key"] = "mutated"
+
+	// Document: shallow copy shares the map. This test documents the behavior.
+	if original.Options["key"] != "mutated" {
+		t.Fatal("Session is a value type with a reference-type map; shallow copy shares Options")
+	}
+}

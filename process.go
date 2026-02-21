@@ -27,4 +27,10 @@ type Process interface {
 	// Wait blocks until the session ends naturally.
 	// Returns nil on clean exit, or an error describing the failure.
 	Wait() error
+
+	// Err returns the terminal error after the Output channel is closed.
+	// Returns nil if the session ended cleanly. Callers should call Err
+	// after the Output channel is closed to distinguish clean exit from
+	// failure.
+	Err() error
 }

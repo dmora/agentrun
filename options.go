@@ -7,9 +7,11 @@ import "time"
 // options into this struct.
 type StartOptions struct {
 	// Prompt overrides Session.Prompt for this invocation.
+	// Zero value means use Session.Prompt.
 	Prompt string
 
 	// Model overrides Session.Model for this invocation.
+	// Zero value means use Session.Model.
 	Model string
 
 	// Timeout sets a deadline for the Start operation.
@@ -25,7 +27,9 @@ type Option func(*StartOptions)
 func ResolveOptions(opts ...Option) StartOptions {
 	var so StartOptions
 	for _, opt := range opts {
-		opt(&so)
+		if opt != nil {
+			opt(&so)
+		}
 	}
 	return so
 }

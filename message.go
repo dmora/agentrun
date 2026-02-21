@@ -51,9 +51,15 @@ type Message struct {
 
 	// RawLine is the original unparsed output line from stdout.
 	// Used for crash-recovery log pipelines and audit logging.
+	//
+	// RawLine may contain sensitive data (credentials, PHI) from agent
+	// output. Implementations should redact or omit this field before
+	// writing to persistent audit logs.
 	RawLine string `json:"raw_line,omitempty"`
 
 	// Timestamp is when the message was produced.
+	// Producers should always set this; zero value serializes as
+	// "0001-01-01T00:00:00Z".
 	Timestamp time.Time `json:"timestamp"`
 }
 
