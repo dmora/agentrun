@@ -25,3 +25,6 @@ go.work.sum
 # OS
 .DS_Store
 Thumbs.db
+
+# MCP tool state
+.maxential/
