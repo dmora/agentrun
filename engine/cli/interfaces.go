@@ -59,6 +59,14 @@ type Streamer interface {
 	StreamArgs(session agentrun.Session) (binary string, args []string)
 }
 
+// Backend is the minimum interface a CLI backend must implement.
+// Optional capabilities (Resumer, Streamer, InputFormatter) are
+// discovered via type assertion at runtime.
+type Backend interface {
+	Spawner
+	Parser
+}
+
 // InputFormatter encodes user messages for delivery to a subprocess stdin
 // pipe. InputFormatter is optional — the CLIEngine discovers it via type
 // assertion independently of Streamer:

@@ -40,7 +40,10 @@ agentrun is a **two-layer engine pattern**:
 ```
 agentrun (interfaces)
 ├── engine/cli/          ← CLIEngine: subprocess transport adapter
-│   ├── interfaces.go    ← Spawner, Parser, Resumer, Streamer (consumer-side)
+│   ├── interfaces.go    ← Spawner, Parser, Resumer, Streamer, InputFormatter, Backend
+│   ├── engine.go        ← Engine, NewEngine, Validate, Start (!windows)
+│   ├── process.go       ← process impl, readLoop, signalProcess (!windows)
+│   ├── options.go       ← EngineOptions, EngineOption, With* functions
 │   ├── claude/          ← Claude Code backend
 │   └── opencode/        ← OpenCode backend
 ├── engine/api/
@@ -53,7 +56,7 @@ agentrun (interfaces)
 | Package | Purpose |
 |---------|---------|
 | `agentrun` | Root: Engine, Process, Session, Message interfaces/types |
-| `engine/cli` | Generic CLI subprocess engine + consumer-side interfaces |
+| `engine/cli` | CLI subprocess engine: Backend→Engine adapter, process lifecycle, signal handling |
 | `engine/cli/claude` | Claude Code backend (Spawner + Parser) |
 | `engine/cli/opencode` | OpenCode backend (Spawner + Parser) |
 | `engine/api/adk` | Google ADK API engine |
@@ -64,7 +67,9 @@ agentrun (interfaces)
 
 - **Zero external dependencies** in the root package — stdlib only
 - **Interfaces at consumer side**: `engine/cli/interfaces.go` defines Spawner/Parser/etc; backends implement them
-- **Capabilities via type assertion**: optional features (Resumer, Streamer) are separate interfaces checked at runtime — no boolean flags
+- **Capabilities via type assertion**: optional features (Resumer, Streamer, InputFormatter) are separate interfaces resolved once at Start — no boolean flags
 - **Function-field injection** for test doubles — no mock generation libraries
 - **`enginetest/` compliance suites**: backends prove correctness via `Run*Tests` functions with factory callbacks
 - **Separate examples module**: `examples/go.mod` avoids pulling example deps into library consumers
+- **Platform build constraints**: Engine implementations using OS-specific features (signals, process groups) use `//go:build !windows` on implementation files. Interface and option files remain platform-agnostic.
+- **Signal safety**: All process Signal/Kill calls use `signalProcess()` helper which handles `os.ErrProcessDone` — prevents errors on already-exited processes
