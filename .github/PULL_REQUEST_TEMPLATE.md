@@ -10,5 +10,4 @@ Closes #
 
 ## Test plan
 
-- [ ] `make check` passes
-- [ ] `make examples-build` passes
+- [ ] `make qa` passes

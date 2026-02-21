@@ -22,12 +22,14 @@ jobs:
       - name: Check go.mod tidiness
         run: |
           go mod tidy
-          git diff --exit-code go.mod go.sum
+          git diff --exit-code go.mod
+          if [ -f go.sum ]; then git diff --exit-code go.sum; fi
       - name: Check examples go.mod tidiness
         run: |
           cd examples
           go mod tidy
-          git diff --exit-code go.mod go.sum
+          git diff --exit-code go.mod
+          if [ -f go.sum ]; then git diff --exit-code go.sum; fi
       - run: |
           UNFORMATTED=$(gofmt -l .)
           if [ -n "$UNFORMATTED" ]; then

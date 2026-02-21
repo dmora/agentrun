@@ -1,15 +1,30 @@
 # agentrun — Claude Code Project Guide
 
+## Library-First Mindset
+
+agentrun is a **public Go library** — not an application. Every decision must prioritize external consumers:
+
+- **Composability**: interfaces should be wrappable, decoratable, and mixable without friction. Consumers build their own orchestrators on top of agentrun primitives.
+- **Extensibility**: adding a custom backend (CLI or API) should require implementing 1–2 small interfaces, not understanding the whole codebase. No closed registries or internal-only extension points.
+- **Greenfield**: no backwards compatibility concerns. Design the best API possible without legacy shims or deprecation paths.
+- **Think like a library author**: exported API surface is a contract. Keep it small, intentional, and hard to misuse. Unexported internals can change freely.
+
 ## Build & Test Commands
 
 ```bash
-make check          # lint + test (primary CI gate)
+make qa             # full quality gate (tidy-check + lint + test-race + vet + vulncheck + examples)
+make check          # fast check: lint + test (no race detector)
+make test           # go test -count=1 ./...
+make test-race      # go test -race -count=1 ./...
 make lint           # golangci-lint run ./...
-make test           # go test -race -count=1 ./...
+make vet            # go vet ./...
+make cover          # test with race + coverage report
+make tidy-check     # verify go.mod/go.sum are clean
+make vulncheck      # govulncheck ./...
+make bench          # benchmarks with memory allocation stats
+make fuzz           # fuzz tests (30s per target)
 make fmt            # gofmt -w .
 make tidy           # go mod tidy
-make coverage       # test with coverage report
-make vulncheck      # govulncheck ./...
 make examples-build # cd examples && go build ./...
 ```
 
