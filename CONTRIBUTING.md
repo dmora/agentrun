@@ -16,11 +16,10 @@ Requirements:
 
 1. Create a feature branch from `main`
 2. Make your changes
-3. Ensure `make check` passes (lint + tests with race detector)
-4. Ensure `make examples-build` succeeds
-5. Open a PR against `main`
+3. Run `make qa` (full quality gate: tidy-check, lint, test with race detector, vet, vulncheck, examples)
+4. Open a PR against `main`
 
-All PRs require CI to pass before merge. The lint workflow checks formatting, module tidiness, and linter rules.
+Use `make check` for fast iteration (lint + test without race detector). All PRs require CI to pass before merge.
 
 ## Design Decisions
 

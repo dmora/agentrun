@@ -72,8 +72,9 @@ Engine implementations live in subpackages. CLI backends share a generic `cli.CL
 ## Development
 
 ```bash
-make check          # lint + test
-make coverage       # test with coverage report
+make qa             # full quality gate (lint + test-race + vet + vulncheck + more)
+make check          # fast check (lint + test, no race detector)
+make cover          # test with coverage report
 make examples-build # build example programs
 ```
 
