@@ -38,3 +38,4 @@ jobs:
         with:
           version: v2.9.0
           args: --timeout=5m
+          cache-invalidation-interval: 7

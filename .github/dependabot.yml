@@ -4,25 +4,31 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    commit-message:
+      prefix: "deps(go):"
     groups:
-      go-deps:
-        patterns:
-          - "*"
+      go-minor:
+        patterns: ["*"]
+        update-types: [minor, patch]
 
   - package-ecosystem: gomod
     directory: /examples
     schedule:
       interval: weekly
+    commit-message:
+      prefix: "deps(examples):"
     groups:
-      go-examples-deps:
-        patterns:
-          - "*"
+      go-examples-minor:
+        patterns: ["*"]
+        update-types: [minor, patch]
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    commit-message:
+      prefix: "deps(ci):"
     groups:
-      actions:
-        patterns:
-          - "*"
+      actions-minor:
+        patterns: ["*"]
+        update-types: [minor, patch]

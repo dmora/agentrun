@@ -102,6 +102,10 @@ linters:
 formatters:
   enable:
     - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/dmora/agentrun
   exclusions:
     generated: lax
     paths:

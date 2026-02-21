@@ -1,0 +1,21 @@
+name: Dependabot Rebase
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  rebase:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Rebase open Dependabot PRs
+        run: |
+          gh pr list --repo "$GITHUB_REPOSITORY" --author "app/dependabot" --state open --json number --jq '.[].number' | while read -r pr; do
+            gh pr comment "$pr" --repo "$GITHUB_REPOSITORY" --body "@dependabot rebase"
+          done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
