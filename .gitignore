@@ -26,5 +26,9 @@ go.work.sum
 .DS_Store
 Thumbs.db
 
+# Claude Code local config (gitignored by convention)
+.claude/settings.local.json
+CLAUDE.local.md
+
 # MCP tool state
 .maxential/

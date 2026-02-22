@@ -27,6 +27,9 @@ const (
 	// MessageInit is the handshake message sent at session start.
 	MessageInit MessageType = "init"
 
+	// MessageResult signals turn completion with optional usage data.
+	MessageResult MessageType = "result"
+
 	// MessageEOF signals the end of the message stream.
 	MessageEOF MessageType = "eof"
 )
