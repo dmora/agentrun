@@ -192,7 +192,7 @@ func appendSessionArgs(args []string, session agentrun.Session) []string {
 
 	perm := PermissionMode(session.Options[OptionPermissionMode])
 	if perm != "" && perm != PermissionDefault {
-		if mapped, err := mapPermission(perm); err == nil && !containsNull(string(perm)) {
+		if mapped, err := mapPermission(perm); err == nil {
 			args = append(args, "--permission-mode", mapped)
 		}
 	}
