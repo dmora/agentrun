@@ -67,14 +67,10 @@ tidy:
 
 examples-tidy-check:  ## Verify examples go.mod/go.sum are clean
 	@cd examples && \
-	cp go.mod go.mod.bak && \
-	(cp go.sum go.sum.bak 2>/dev/null || true) && \
 	go mod tidy && \
-	diff go.mod go.mod.bak && \
-	(diff go.sum go.sum.bak 2>/dev/null || true); \
-	STATUS=$$?; \
-	rm -f go.mod.bak go.sum.bak; \
-	exit $$STATUS
+	git diff --quiet --exit-code -- go.mod && \
+	{ [ ! -f go.sum ] || git diff --quiet --exit-code -- go.sum; } || \
+	{ echo "FAIL: examples module is not tidy. Run 'cd examples && go mod tidy' and commit." >&2; exit 1; }
 
 examples-build:
 	cd examples && go build ./...

@@ -100,6 +100,11 @@ func drainMessages(proc agentrun.Process) error {
 		}
 	}
 
+	// Check for process-level errors (e.g., non-zero exit before result).
+	// Filter ErrTerminated — that's the expected outcome of our explicit Stop.
+	if err := proc.Err(); err != nil && !errors.Is(err, agentrun.ErrTerminated) {
+		return fmt.Errorf("process exited with error: %w", err)
+	}
 	if agentErr != "" {
 		return fmt.Errorf("agent error: %s", agentErr)
 	}
