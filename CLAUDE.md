@@ -57,8 +57,8 @@ agentrun (interfaces)
 |---------|---------|
 | `agentrun` | Root: Engine, Process, Session, Message interfaces/types |
 | `engine/cli` | CLI subprocess engine: Backend→Engine adapter, process lifecycle, signal handling |
-| `engine/cli/claude` | Claude Code backend (Spawner + Parser) |
-| `engine/cli/opencode` | OpenCode backend (Spawner + Parser) |
+| `engine/cli/claude` | Claude Code backend (all 5 cli interfaces: Spawner, Parser, Resumer, Streamer, InputFormatter) |
+| `engine/cli/opencode` | OpenCode backend (stub) |
 | `engine/api/adk` | Google ADK API engine |
 | `enginetest` | Shared compliance test suites (RunSpawnerTests, etc.) |
 | `examples/` | Separate module with runnable examples |

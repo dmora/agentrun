@@ -13,7 +13,8 @@
       "Bash(govulncheck *)",
       "Bash(gh pr *)",
       "Bash(gh issue *)",
-      "Bash(gh run *)"
+      "Bash(gh run *)",
+      "Bash(go run *)"
     ]
   }
 }
