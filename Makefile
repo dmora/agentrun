@@ -1,8 +1,8 @@
-.PHONY: qa lint test test-race check cover vet tidy-check vulncheck bench fuzz fmt tidy examples-build
+.PHONY: qa lint test test-race check cover vet tidy-check vulncheck bench fuzz fmt tidy examples-tidy-check examples-build smoke
 
 # ---- Composite targets ----
 
-qa: tidy-check lint test-race vet vulncheck examples-build  ## Full quality gate
+qa: tidy-check lint test-race vet vulncheck examples-tidy-check examples-build  ## Full quality gate
 
 check: lint test  ## Fast check (CI default)
 
@@ -53,6 +53,7 @@ bench:
 fuzz:
 	go test -fuzz=FuzzResolveOptions -fuzztime=30s .
 	go test -fuzz=FuzzMessageJSON -fuzztime=30s .
+	go test -fuzz=FuzzParseLine -fuzztime=30s ./engine/cli/claude/
 
 # ---- Formatting ----
 
@@ -64,5 +65,18 @@ tidy:
 
 # ---- Examples ----
 
+examples-tidy-check:  ## Verify examples go.mod/go.sum are clean
+	@cd examples && \
+	go mod tidy && \
+	git diff --quiet --exit-code -- go.mod && \
+	{ [ ! -f go.sum ] || git diff --quiet --exit-code -- go.sum; } || \
+	{ echo "FAIL: examples module is not tidy. Run 'cd examples && go mod tidy' and commit." >&2; exit 1; }
+
 examples-build:
 	cd examples && go build ./...
+
+# ---- Smoke test (standalone, requires claude CLI) ----
+
+smoke:  ## Run Claude smoke test (requires claude CLI, not in qa)
+	@command -v claude >/dev/null 2>&1 || { echo "SKIP smoke: claude binary not found"; exit 0; }
+	cd examples && CLAUDECODE= go run ./simple/  # unset to allow spawning from a Claude Code session
