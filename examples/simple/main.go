@@ -67,39 +67,60 @@ func run() error {
 		return fmt.Errorf("send prompt: %w", err)
 	}
 
-	return drainMessages(proc)
+	return drainMessages(ctx, proc)
 }
 
 // drainMessages reads all messages from the process, printing each one,
-// and returns an error if the agent reported errors or no response arrived.
-func drainMessages(proc agentrun.Process) error {
+// and returns an error if the agent reported errors, no response arrived,
+// or the context deadline is exceeded.
+func drainMessages(ctx context.Context, proc agentrun.Process) error {
 	var gotResponse bool
 	var agentErr string
-	for msg := range proc.Output() {
-		switch msg.Type {
-		case agentrun.MessageInit:
-			fmt.Println("[init]    (session started)")
-		case agentrun.MessageText:
-			fmt.Printf("[text]    %s\n", msg.Content)
-			gotResponse = true
-		case agentrun.MessageResult:
-			fmt.Printf("[result]  %s\n", msg.Content)
-			gotResponse = true
-			// Result signals turn completion. In streaming mode Claude keeps
-			// the stdin pipe open for follow-up messages, so we stop explicitly.
-			_ = proc.Stop(context.Background())
-		case agentrun.MessageError:
-			fmt.Fprintf(os.Stderr, "[error]   %s\n", msg.Content)
-			agentErr = msg.Content
-		case agentrun.MessageToolResult:
-			fmt.Printf("[tool]    %s\n", msg.Tool.Name)
-		case agentrun.MessageSystem, agentrun.MessageEOF:
-			// silent — system status and EOF are infrastructure signals
-		default:
-			fmt.Printf("[%s]  %s\n", msg.Type, msg.Content)
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for response: %w", ctx.Err())
+		case msg, ok := <-proc.Output():
+			if !ok {
+				return checkResult(proc, agentErr, gotResponse)
+			}
+			printMessage(msg)
+			switch msg.Type {
+			case agentrun.MessageText:
+				gotResponse = true
+			case agentrun.MessageResult:
+				gotResponse = true
+				_ = proc.Stop(context.Background())
+			case agentrun.MessageError:
+				agentErr = msg.Content
+			default:
+			}
 		}
 	}
+}
 
+// printMessage prints a single message to stdout/stderr.
+func printMessage(msg agentrun.Message) {
+	switch msg.Type {
+	case agentrun.MessageInit:
+		fmt.Println("[init]    (session started)")
+	case agentrun.MessageText:
+		fmt.Printf("[text]    %s\n", msg.Content)
+	case agentrun.MessageResult:
+		fmt.Printf("[result]  %s\n", msg.Content)
+	case agentrun.MessageError:
+		fmt.Fprintf(os.Stderr, "[error]   %s\n", msg.Content)
+	case agentrun.MessageToolResult:
+		fmt.Printf("[tool]    %s\n", msg.Tool.Name)
+	case agentrun.MessageSystem, agentrun.MessageEOF:
+		// silent — system status and EOF are infrastructure signals
+	default:
+		fmt.Printf("[%s]  %s\n", msg.Type, msg.Content)
+	}
+}
+
+// checkResult validates the final process state after all messages are drained.
+func checkResult(proc agentrun.Process, agentErr string, gotResponse bool) error {
 	// Check for process-level errors (e.g., non-zero exit before result).
 	// Filter ErrTerminated — that's the expected outcome of our explicit Stop.
 	if err := proc.Err(); err != nil && !errors.Is(err, agentrun.ErrTerminated) {
