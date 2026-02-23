@@ -1,11 +1,15 @@
 //go:build !windows
 
-// Command interactive demonstrates multi-turn streaming conversations
-// with agentrun. It starts a Claude session and runs a REPL loop,
-// sending user input and printing streamed responses.
+// Command stream-inspector is a protocol debugging tool for agentrun.
+// It prints every message from the output channel with timestamps,
+// parsed types, and raw stdout lines — including system/lifecycle
+// events that normal examples suppress.
+//
+// Useful for verifying which event types a CLI backend actually emits
+// (e.g., thinking_delta, signature_delta) and for latency analysis.
 //
 // Requires the claude CLI on PATH.
-// Run via: cd examples && CLAUDECODE= go run ./interactive/
+// Run via: cd examples && CLAUDECODE= go run ./stream-inspector/
 package main
 
 import (
@@ -28,6 +32,10 @@ import (
 const stopTimeout = 5 * time.Second
 
 func main() {
+	fmt.Fprintln(os.Stderr, "WARNING: This tool prints all model output including thinking blocks.")
+	fmt.Fprintln(os.Stderr, "         Do not use with sensitive prompts or in shared terminals.")
+	fmt.Fprintln(os.Stderr, "")
+
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -66,18 +74,16 @@ func run() error {
 		_ = proc.Stop(stopCtx)
 	}()
 
-	fmt.Println("agentrun interactive example (type 'exit' to quit)")
+	fmt.Println("stream-inspector (type 'exit' to quit)")
 	return repl(ctx, proc)
 }
 
-// repl runs the read-eval-print loop, reading user input from stdin
-// and sending it to the process until exit, quit, or EOF.
 func repl(ctx context.Context, proc agentrun.Process) error {
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
 		fmt.Print("\nyou> ")
 		if !scanner.Scan() {
-			break // EOF or Ctrl+D
+			break
 		}
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
@@ -100,57 +106,22 @@ func repl(ctx context.Context, proc agentrun.Process) error {
 	return nil
 }
 
-// drainTurn reads messages until MessageResult (turn complete).
-// Handles streaming deltas for live token display. MessageError is
-// printed but does not terminate the REPL.
 func drainTurn(ctx context.Context, proc agentrun.Process) error {
-	var sawDelta bool
 	for {
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("interrupted: %w", ctx.Err())
 		case msg, ok := <-proc.Output():
 			if !ok {
-				return channelClosed(proc)
+				if err := proc.Err(); err != nil {
+					return fmt.Errorf("process exited: %w", err)
+				}
+				return errors.New("process exited unexpectedly")
 			}
-			sawDelta = handleStreamingMessage(msg, sawDelta)
+			display.PrintRaw(msg)
 			if msg.Type == agentrun.MessageResult {
-				return nil // turn complete
+				return nil
 			}
 		}
-	}
-}
-
-// channelClosed returns an appropriate error when the output channel closes.
-func channelClosed(proc agentrun.Process) error {
-	if err := proc.Err(); err != nil {
-		return fmt.Errorf("process exited: %w", err)
-	}
-	return errors.New("process exited unexpectedly")
-}
-
-// handleStreamingMessage prints a message with delta-aware formatting.
-// Returns the updated sawDelta state.
-func handleStreamingMessage(msg agentrun.Message, sawDelta bool) bool {
-	switch msg.Type {
-	case agentrun.MessageTextDelta, agentrun.MessageThinkingDelta, agentrun.MessageToolUseDelta:
-		fmt.Print(msg.Content) // live token, no newline
-		return true
-	case agentrun.MessageText:
-		if sawDelta {
-			fmt.Println() // newline to cap delta stream
-		} else {
-			display.PrintMessage(msg) // no deltas — print full text
-		}
-		return false
-	case agentrun.MessageResult, agentrun.MessageError:
-		if sawDelta {
-			fmt.Println() // newline to cap delta stream
-		}
-		display.PrintMessage(msg)
-		return false
-	default:
-		display.PrintMessage(msg)
-		return sawDelta
 	}
 }

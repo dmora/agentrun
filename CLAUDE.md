@@ -9,6 +9,24 @@ agentrun is a **public Go library** — not an application. Every decision must 
 - **Greenfield**: no backwards compatibility concerns. Design the best API possible without legacy shims or deprecation paths.
 - **Think like a library author**: exported API surface is a contract. Keep it small, intentional, and hard to misuse. Unexported internals can change freely.
 
+## Design Philosophy — Root is Language, Backends are Dialect
+
+See [DESIGN.md](DESIGN.md) for full rationale, examples, and anti-patterns.
+
+The root package defines the **shared vocabulary** for all backends:
+- **Output vocabulary**: `MessageType` constants (what agents say)
+- **Input vocabulary**: `Option*` constants (what you ask of agents)
+- **Structural config**: `Session.Model`, `Session.Prompt`
+
+Backend packages translate vocabulary into their wire format (CLI flags, API bodies).
+
+**Decision rule for where a constant lives:**
+> Would this concept exist if backend X didn't exist? **Yes → root. No → backend package.**
+
+Examples: `OptionSystemPrompt` → root (every LLM has one). `OptionPermissionMode` → `claude/` (Claude CLI sandboxing).
+
+**Anti-pattern:** Don't place cross-cutting constants in a backend just because only one backend exists today. Design for the intended architecture (N backends), not the current snapshot.
+
 ## Build & Test Commands
 
 ```bash

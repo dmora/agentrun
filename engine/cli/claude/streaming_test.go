@@ -89,6 +89,7 @@ func TestStreaming_FullPipeline(t *testing.T) {
 	}
 
 	verifyDeltaOrdering(t, types)
+	verifyThinkingBeforeText(t, types)
 
 	// Verify delta content.
 	deltaText := concatContent(msgs, agentrun.MessageTextDelta)
@@ -125,6 +126,26 @@ func verifyDeltaOrdering(t *testing.T, types []agentrun.MessageType) {
 	}
 }
 
+// verifyThinkingBeforeText checks that MessageThinking arrives before MessageText.
+func verifyThinkingBeforeText(t *testing.T, types []agentrun.MessageType) {
+	t.Helper()
+	thinkingIdx, textIdx := -1, -1
+	for i, mt := range types {
+		if mt == agentrun.MessageThinking && thinkingIdx == -1 {
+			thinkingIdx = i
+		}
+		if mt == agentrun.MessageText {
+			textIdx = i
+		}
+	}
+	if thinkingIdx == -1 {
+		t.Fatal("no MessageThinking received")
+	}
+	if thinkingIdx >= textIdx {
+		t.Errorf("thinking (idx %d) should arrive before text (idx %d)", thinkingIdx, textIdx)
+	}
+}
+
 func TestStreaming_CompletedFilter(t *testing.T) {
 	proc, ctx := startMockProc(t)
 	msgs := collectMessages(filter.Completed(ctx, proc.Output()))
@@ -139,9 +160,15 @@ func TestStreaming_CompletedFilter(t *testing.T) {
 	for _, m := range msgs {
 		typeSet[m.Type] = true
 	}
-	for _, want := range []agentrun.MessageType{agentrun.MessageInit, agentrun.MessageText, agentrun.MessageResult} {
+	for _, want := range []agentrun.MessageType{agentrun.MessageInit, agentrun.MessageThinking, agentrun.MessageText, agentrun.MessageResult} {
 		if !typeSet[want] {
 			t.Errorf("missing %q in Completed output", want)
+		}
+	}
+
+	for _, m := range msgs {
+		if m.Type == agentrun.MessageThinking && m.Content != "Let me think" {
+			t.Errorf("thinking content = %q, want %q", m.Content, "Let me think")
 		}
 	}
 }
@@ -190,6 +217,11 @@ func TestStreaming_AllDeltaTypes(t *testing.T) {
 		if !typeSet[want] {
 			t.Errorf("missing delta type %q", want)
 		}
+	}
+
+	// Verify signature_delta maps to MessageSystem (not a delta type).
+	if !typeSet[agentrun.MessageSystem] {
+		t.Error("missing MessageSystem — signature_delta should produce MessageSystem")
 	}
 
 	// Verify concatenated content for each delta type.

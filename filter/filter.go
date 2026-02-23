@@ -5,6 +5,7 @@ package filter
 
 import (
 	"context"
+	"strings"
 
 	"github.com/dmora/agentrun"
 )
@@ -41,14 +42,11 @@ func ResultOnly(ctx context.Context, ch <-chan agentrun.Message) <-chan agentrun
 }
 
 // IsDelta reports whether t is a streaming delta (partial) message type.
-// NOTE: Must be updated when new delta MessageType constants are added to message.go.
+// Convention: all delta types use the "_delta" suffix (e.g., text_delta,
+// tool_use_delta, thinking_delta). This avoids needing to update a
+// switch statement each time a new delta type is added.
 func IsDelta(t agentrun.MessageType) bool {
-	switch t {
-	case agentrun.MessageTextDelta, agentrun.MessageToolUseDelta, agentrun.MessageThinkingDelta:
-		return true
-	default:
-		return false
-	}
+	return strings.HasSuffix(string(t), "_delta")
 }
 
 // pipe spawns a goroutine that reads from ch, passes messages matching

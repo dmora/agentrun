@@ -29,6 +29,7 @@ func main() {
 		`{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}}`,
 		`{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Let me"}}}`,
 		`{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":" think"}}}`,
+		`{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"ErUBCkYIAxgCIkD"}}}`,
 		`{"type":"stream_event","event":{"type":"content_block_stop","index":0}}`,
 		// Text block.
 		`{"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}}`,
@@ -42,6 +43,7 @@ func main() {
 		`{"type":"stream_event","event":{"type":"content_block_stop","index":2}}`,
 		`{"type":"stream_event","event":{"type":"message_delta","delta":{"stop_reason":"end_turn"}}}`,
 		`{"type":"stream_event","event":{"type":"message_stop"}}`,
+		`{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"Let me think"}]}}`,
 		`{"type":"assistant","message":{"content":[{"type":"text","text":"Hello world"}]}}`,
 		`{"type":"result","result":"Hello world"}`,
 	}

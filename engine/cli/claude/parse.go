@@ -91,27 +91,49 @@ func parseAssistantMessage(raw map[string]any, msg *agentrun.Message) {
 }
 
 // parseAssistantContent iterates the content array inside an assistant message,
-// concatenating text blocks and capturing tool_use blocks (last one wins).
+// concatenating text blocks, capturing thinking blocks, and capturing tool_use
+// blocks (last one wins).
+//
+// When the content array contains only thinking blocks (no text), the message
+// type is set to MessageThinking. Otherwise it stays MessageText and thinking
+// content is available in msg.Raw for consumers who need it.
 func parseAssistantContent(message map[string]any, msg *agentrun.Message) {
 	contentArr, ok := message["content"].([]any)
 	if !ok {
 		return
 	}
 
-	var b strings.Builder
+	var text, thinking strings.Builder
 	for _, c := range contentArr {
 		cm, ok := c.(map[string]any)
 		if !ok {
 			continue
 		}
-		if t, ok := cm["text"].(string); ok {
-			b.WriteString(t)
-		}
-		if ct, ok := cm["type"].(string); ok && ct == "tool_use" {
+		ct, _ := cm["type"].(string)
+		switch ct {
+		case "thinking":
+			if t, ok := cm["thinking"].(string); ok {
+				thinking.WriteString(t)
+			}
+		case "tool_use":
 			msg.Tool = extractToolCall(cm)
+		default:
+			// "text" and any other content block type with a "text" field.
+			if t, ok := cm["text"].(string); ok {
+				text.WriteString(t)
+			}
 		}
 	}
-	msg.Content = b.String()
+
+	if text.Len() > 0 {
+		msg.Content = text.String()
+		return
+	}
+	// No text content — if we have thinking, emit as MessageThinking.
+	if thinking.Len() > 0 {
+		msg.Type = agentrun.MessageThinking
+		msg.Content = thinking.String()
+	}
 }
 
 // extractToolCall builds a ToolCall from a content block map.
@@ -209,6 +231,10 @@ func parseContentBlockDelta(event map[string]any, msg *agentrun.Message) {
 	case "thinking_delta":
 		msg.Type = agentrun.MessageThinkingDelta
 		msg.Content = getString(delta, "thinking")
+	case "signature_delta":
+		// Integrity verification — opaque data, not consumer-visible content.
+		msg.Type = agentrun.MessageSystem
+		msg.Content = getString(delta, "signature")
 	default:
 		msg.Type = agentrun.MessageSystem
 		msg.Content = "content_block_delta: unknown delta type: " + getString(delta, "type")

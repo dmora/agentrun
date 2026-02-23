@@ -11,17 +11,16 @@ import (
 	"github.com/dmora/agentrun/engine/cli"
 )
 
-// Session option keys for Session.Options map.
+// Session option keys specific to the Claude CLI backend.
+// Cross-cutting options (OptionSystemPrompt, OptionMaxTurns,
+// OptionThinkingBudget) are defined in the root agentrun package.
 const (
-	// OptionSystemPrompt sets the Claude Code --system-prompt flag.
-	OptionSystemPrompt = "system_prompt"
-
 	// OptionPermissionMode sets the Claude Code --permission-mode flag.
 	// Values should be PermissionMode constants.
+	// This stays in the claude package (not root) because permission modes
+	// are Claude CLI-specific — other backends have different or no
+	// permission models. See DESIGN.md decision rule.
 	OptionPermissionMode = "permission_mode"
-
-	// OptionMaxTurns sets the Claude Code --max-turns flag.
-	OptionMaxTurns = "max_turns"
 
 	// OptionResumeID is the Claude conversation ID for --resume.
 	// Only valid in ResumeArgs; SpawnArgs ignores this key.
@@ -153,6 +152,13 @@ func (b *Backend) ResumeArgs(session agentrun.Session, initialPrompt string) (st
 		}
 	}
 
+	if err := validatePositiveInt(session.Options, agentrun.OptionMaxTurns, "max turns"); err != nil {
+		return "", nil, err
+	}
+	if err := validatePositiveInt(session.Options, agentrun.OptionThinkingBudget, "thinking budget"); err != nil {
+		return "", nil, err
+	}
+
 	args := baseArgs()
 	args = append(args, "--resume", resumeID)
 	args = appendSessionArgs(args, session)
@@ -194,15 +200,47 @@ func containsNull(s string) bool {
 	return strings.ContainsRune(s, '\x00')
 }
 
-// appendSessionArgs appends model, system-prompt, permission-mode, and
-// max-turns flags based on session fields and options. Invalid or
-// null-byte-containing values are silently skipped.
+// validatePositiveInt checks that opts[key], if non-empty, is a valid positive
+// integer with no null bytes. Returns an error with the given label for
+// diagnostics. Used by ResumeArgs for strict pre-validation.
+func validatePositiveInt(opts map[string]string, key, label string) error {
+	v := opts[key]
+	if v == "" {
+		return nil
+	}
+	if containsNull(v) {
+		return fmt.Errorf("claude: %s contains null bytes", label)
+	}
+	if n, err := strconv.Atoi(v); err != nil || n <= 0 {
+		return fmt.Errorf("claude: invalid %s %q: must be a positive integer", label, v)
+	}
+	return nil
+}
+
+// appendPositiveInt appends --flag <value> if opts[key] is a valid positive
+// integer. Invalid, zero, negative, or null-byte-containing values are
+// silently skipped. The value is round-tripped through Atoi/Itoa to ensure
+// only clean integers reach the CLI.
+func appendPositiveInt(args []string, opts map[string]string, key, flag string) []string {
+	v := opts[key]
+	if v == "" || containsNull(v) {
+		return args
+	}
+	if n, err := strconv.Atoi(v); err == nil && n > 0 {
+		args = append(args, flag, strconv.Itoa(n))
+	}
+	return args
+}
+
+// appendSessionArgs appends model, system-prompt, permission-mode,
+// max-turns, and max-thinking-tokens flags based on session fields
+// and options. Invalid or null-byte-containing values are silently skipped.
 func appendSessionArgs(args []string, session agentrun.Session) []string {
 	if session.Model != "" && !containsNull(session.Model) {
 		args = append(args, "--model", session.Model)
 	}
 
-	if sp := session.Options[OptionSystemPrompt]; sp != "" && !containsNull(sp) {
+	if sp := session.Options[agentrun.OptionSystemPrompt]; sp != "" && !containsNull(sp) {
 		args = append(args, "--system-prompt", sp)
 	}
 
@@ -213,11 +251,8 @@ func appendSessionArgs(args []string, session agentrun.Session) []string {
 		}
 	}
 
-	if mt := session.Options[OptionMaxTurns]; mt != "" && !containsNull(mt) {
-		if n, err := strconv.Atoi(mt); err == nil && n > 0 {
-			args = append(args, "--max-turns", mt)
-		}
-	}
+	args = appendPositiveInt(args, session.Options, agentrun.OptionMaxTurns, "--max-turns")
+	args = appendPositiveInt(args, session.Options, agentrun.OptionThinkingBudget, "--max-thinking-tokens")
 
 	return args
 }

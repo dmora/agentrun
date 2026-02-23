@@ -2,6 +2,10 @@ package filter
 
 import (
 	"context"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"strings"
 	"testing"
 
 	"github.com/dmora/agentrun"
@@ -123,6 +127,7 @@ func TestCompleted_PassesNonDelta(t *testing.T) {
 		agentrun.MessageText, agentrun.MessageResult, agentrun.MessageError,
 		agentrun.MessageInit, agentrun.MessageSystem, agentrun.MessageEOF,
 		agentrun.MessageToolUse, agentrun.MessageToolResult,
+		agentrun.MessageThinking,
 	}
 	in := make(chan agentrun.Message, len(nonDelta))
 	go func() {
@@ -226,6 +231,7 @@ func TestIsDelta(t *testing.T) {
 		{agentrun.MessageEOF, false},
 		{agentrun.MessageToolUse, false},
 		{agentrun.MessageToolResult, false},
+		{agentrun.MessageThinking, false},
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.mt), func(t *testing.T) {
@@ -233,5 +239,53 @@ func TestIsDelta(t *testing.T) {
 				t.Errorf("IsDelta(%q) = %v, want %v", tt.mt, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestIsDelta_CoversAllDeltaTypes parses message.go to find all MessageType
+// constants whose names end in "Delta" and verifies IsDelta returns true
+// for each. Catches missing IsDelta updates when new delta types are added.
+func TestIsDelta_CoversAllDeltaTypes(t *testing.T) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "../message.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse message.go: %v", err)
+	}
+
+	var deltaNames []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		vs, ok := n.(*ast.ValueSpec)
+		if !ok {
+			return true
+		}
+		for _, name := range vs.Names {
+			if strings.HasSuffix(name.Name, "Delta") {
+				deltaNames = append(deltaNames, name.Name)
+			}
+		}
+		return true
+	})
+
+	if len(deltaNames) == 0 {
+		t.Fatal("found no *Delta constants in message.go — test is broken")
+	}
+
+	// Build a map from constant name to its string value.
+	deltaValues := map[string]agentrun.MessageType{
+		"MessageTextDelta":     agentrun.MessageTextDelta,
+		"MessageToolUseDelta":  agentrun.MessageToolUseDelta,
+		"MessageThinkingDelta": agentrun.MessageThinkingDelta,
+	}
+
+	for _, name := range deltaNames {
+		mt, ok := deltaValues[name]
+		if !ok {
+			t.Errorf("constant %s found in message.go but not in deltaValues map — "+
+				"add its runtime value to deltaValues in this test", name)
+			continue
+		}
+		if !IsDelta(mt) {
+			t.Errorf("IsDelta(%q) = false for constant %s — value must end in _delta", mt, name)
+		}
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/dmora/agentrun"
 	"github.com/dmora/agentrun/engine/cli"
 	"github.com/dmora/agentrun/engine/cli/claude"
+	"github.com/dmora/agentrun/examples/internal/display"
 	"github.com/dmora/agentrun/filter"
 )
 
@@ -51,8 +52,10 @@ func run() error {
 		CWD:    dir,
 		Prompt: "What is 2+2? Reply with only the number.",
 		Options: map[string]string{
+			// Cross-cutting options (root vocabulary).
+			agentrun.OptionMaxTurns: "1",
+			// Claude-specific options (backend dialect).
 			claude.OptionPermissionMode: string(claude.PermissionPlan),
-			claude.OptionMaxTurns:       "1",
 		},
 	}
 
@@ -87,7 +90,7 @@ func drainMessages(ctx context.Context, proc agentrun.Process) error {
 			if !ok {
 				return checkResult(proc, agentErr, gotResponse)
 			}
-			printMessage(msg)
+			display.PrintMessage(msg)
 			switch msg.Type {
 			case agentrun.MessageText:
 				gotResponse = true
@@ -99,26 +102,6 @@ func drainMessages(ctx context.Context, proc agentrun.Process) error {
 			default:
 			}
 		}
-	}
-}
-
-// printMessage prints a single message to stdout/stderr.
-func printMessage(msg agentrun.Message) {
-	switch msg.Type {
-	case agentrun.MessageInit:
-		fmt.Println("[init]    (session started)")
-	case agentrun.MessageText:
-		fmt.Printf("[text]    %s\n", msg.Content)
-	case agentrun.MessageResult:
-		fmt.Printf("[result]  %s\n", msg.Content)
-	case agentrun.MessageError:
-		fmt.Fprintf(os.Stderr, "[error]   %s\n", msg.Content)
-	case agentrun.MessageToolResult:
-		fmt.Printf("[tool]    %s\n", msg.Tool.Name)
-	case agentrun.MessageSystem, agentrun.MessageEOF:
-		// silent — system status and EOF are infrastructure signals
-	default:
-		fmt.Printf("[%s]  %s\n", msg.Type, msg.Content)
 	}
 }
 

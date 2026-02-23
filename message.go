@@ -33,6 +33,21 @@ const (
 	// MessageEOF signals the end of the message stream.
 	MessageEOF MessageType = "eof"
 
+	// MessageThinking contains complete thinking/reasoning content from models
+	// with extended thinking enabled. Thinking content arrives as a complete
+	// content block inside assistant messages.
+	//
+	// Requires OptionThinkingBudget to be set in Session.Options. Without it,
+	// models think internally but do not expose thinking in their output.
+	// The Completed() filter passes MessageThinking through; consumers wanting
+	// only final text should use ResultOnly().
+	MessageThinking MessageType = "thinking"
+
+	// --- Streaming delta types ---
+	//
+	// Delta types carry partial content from token-level streaming.
+	// Use filter.IsDelta() to test, filter.Completed() to drop them.
+
 	// MessageTextDelta is a partial text token from streaming output.
 	// Content holds the text fragment. Emitted when the backend supports
 	// streaming and partial messages are enabled (default for Claude).
@@ -44,7 +59,10 @@ const (
 
 	// MessageThinkingDelta is partial thinking content from streaming output.
 	// Content holds a thinking text fragment.
-	// Note: Not yet empirically verified in Claude CLI output.
+	//
+	// Emitted by the Claude CLI backend when OptionThinkingBudget is set and
+	// streaming is enabled. Also emitted by API-based backends that expose
+	// raw streaming thinking deltas.
 	MessageThinkingDelta MessageType = "thinking_delta"
 )
 
