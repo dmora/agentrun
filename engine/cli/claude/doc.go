@@ -37,10 +37,14 @@
 //
 // # Session Options
 //
-// Use the Option* constants as keys in [agentrun.Session.Options]:
+// The Claude backend honors these cross-cutting options from the root package:
 //
-//   - [OptionSystemPrompt] — sets --system-prompt
+//   - [agentrun.OptionSystemPrompt] — sets --system-prompt
+//   - [agentrun.OptionMaxTurns] — sets --max-turns
+//   - [agentrun.OptionThinkingBudget] — sets --max-thinking-tokens (thinking output)
+//
+// Claude-specific options:
+//
 //   - [OptionPermissionMode] — sets --permission-mode (use [PermissionMode] values)
-//   - [OptionMaxTurns] — sets --max-turns
 //   - [OptionResumeID] — Claude conversation ID for --resume (ResumeArgs only)
 package claude

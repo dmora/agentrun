@@ -43,6 +43,10 @@ func (b *Backend) ParseLine(line string) (agentrun.Message, error) {
 		parseResultMessage(raw, &msg)
 	case "error":
 		parseErrorMessage(raw, &msg)
+	case "stream_event":
+		// Two-level dispatch: stream_event wraps an inner event with its
+		// own type discriminator. See parseStreamEvent for the inner dispatch.
+		parseStreamEvent(raw, &msg)
 	default:
 		msg.Type = sanitizeUnknownType(typeStr)
 	}
@@ -87,27 +91,49 @@ func parseAssistantMessage(raw map[string]any, msg *agentrun.Message) {
 }
 
 // parseAssistantContent iterates the content array inside an assistant message,
-// concatenating text blocks and capturing tool_use blocks (last one wins).
+// concatenating text blocks, capturing thinking blocks, and capturing tool_use
+// blocks (last one wins).
+//
+// When the content array contains only thinking blocks (no text), the message
+// type is set to MessageThinking. Otherwise it stays MessageText and thinking
+// content is available in msg.Raw for consumers who need it.
 func parseAssistantContent(message map[string]any, msg *agentrun.Message) {
 	contentArr, ok := message["content"].([]any)
 	if !ok {
 		return
 	}
 
-	var b strings.Builder
+	var text, thinking strings.Builder
 	for _, c := range contentArr {
 		cm, ok := c.(map[string]any)
 		if !ok {
 			continue
 		}
-		if t, ok := cm["text"].(string); ok {
-			b.WriteString(t)
-		}
-		if ct, ok := cm["type"].(string); ok && ct == "tool_use" {
+		ct, _ := cm["type"].(string)
+		switch ct {
+		case "thinking":
+			if t, ok := cm["thinking"].(string); ok {
+				thinking.WriteString(t)
+			}
+		case "tool_use":
 			msg.Tool = extractToolCall(cm)
+		default:
+			// "text" and any other content block type with a "text" field.
+			if t, ok := cm["text"].(string); ok {
+				text.WriteString(t)
+			}
 		}
 	}
-	msg.Content = b.String()
+
+	if text.Len() > 0 {
+		msg.Content = text.String()
+		return
+	}
+	// No text content — if we have thinking, emit as MessageThinking.
+	if thinking.Len() > 0 {
+		msg.Type = agentrun.MessageThinking
+		msg.Content = thinking.String()
+	}
 }
 
 // extractToolCall builds a ToolCall from a content block map.
@@ -161,6 +187,57 @@ func parseErrorMessage(raw map[string]any, msg *agentrun.Message) {
 		msg.Content = code + ": " + message
 	} else {
 		msg.Content = message
+	}
+}
+
+// parseStreamEvent handles "stream_event" wrapper events from --include-partial-messages.
+// Dispatches content_block_delta subtypes to delta message types; lifecycle events
+// (message_start, content_block_start/stop, message_stop) become MessageSystem.
+func parseStreamEvent(raw map[string]any, msg *agentrun.Message) {
+	event, ok := raw["event"].(map[string]any)
+	if !ok {
+		msg.Type = agentrun.MessageSystem
+		msg.Content = "stream_event: missing or invalid event field"
+		return
+	}
+
+	switch getString(event, "type") {
+	case "content_block_delta":
+		parseContentBlockDelta(event, msg)
+	default:
+		// message_start, content_block_start, content_block_stop,
+		// message_stop, message_delta — all lifecycle events.
+		msg.Type = agentrun.MessageSystem
+		msg.Content = "stream_event: " + getString(event, "type")
+	}
+}
+
+// parseContentBlockDelta extracts delta content from a content_block_delta event.
+func parseContentBlockDelta(event map[string]any, msg *agentrun.Message) {
+	delta, ok := event["delta"].(map[string]any)
+	if !ok {
+		msg.Type = agentrun.MessageSystem
+		msg.Content = "content_block_delta: missing or invalid delta field"
+		return
+	}
+
+	switch getString(delta, "type") {
+	case "text_delta":
+		msg.Type = agentrun.MessageTextDelta
+		msg.Content = getString(delta, "text")
+	case "input_json_delta":
+		msg.Type = agentrun.MessageToolUseDelta
+		msg.Content = getString(delta, "partial_json")
+	case "thinking_delta":
+		msg.Type = agentrun.MessageThinkingDelta
+		msg.Content = getString(delta, "thinking")
+	case "signature_delta":
+		// Integrity verification — opaque data, not consumer-visible content.
+		msg.Type = agentrun.MessageSystem
+		msg.Content = getString(delta, "signature")
+	default:
+		msg.Type = agentrun.MessageSystem
+		msg.Content = "content_block_delta: unknown delta type: " + getString(delta, "type")
 	}
 }
 

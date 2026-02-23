@@ -32,6 +32,38 @@ const (
 
 	// MessageEOF signals the end of the message stream.
 	MessageEOF MessageType = "eof"
+
+	// MessageThinking contains complete thinking/reasoning content from models
+	// with extended thinking enabled. Thinking content arrives as a complete
+	// content block inside assistant messages.
+	//
+	// Requires OptionThinkingBudget to be set in Session.Options. Without it,
+	// models think internally but do not expose thinking in their output.
+	// The Completed() filter passes MessageThinking through; consumers wanting
+	// only final text should use ResultOnly().
+	MessageThinking MessageType = "thinking"
+
+	// --- Streaming delta types ---
+	//
+	// Delta types carry partial content from token-level streaming.
+	// Use filter.IsDelta() to test, filter.Completed() to drop them.
+
+	// MessageTextDelta is a partial text token from streaming output.
+	// Content holds the text fragment. Emitted when the backend supports
+	// streaming and partial messages are enabled (default for Claude).
+	MessageTextDelta MessageType = "text_delta"
+
+	// MessageToolUseDelta is partial tool use input JSON from streaming output.
+	// Content holds a JSON fragment. Emitted during incremental tool input.
+	MessageToolUseDelta MessageType = "tool_use_delta"
+
+	// MessageThinkingDelta is partial thinking content from streaming output.
+	// Content holds a thinking text fragment.
+	//
+	// Emitted by the Claude CLI backend when OptionThinkingBudget is set and
+	// streaming is enabled. Also emitted by API-based backends that expose
+	// raw streaming thinking deltas.
+	MessageThinkingDelta MessageType = "thinking_delta"
 )
 
 // Message is a structured output from an agent process.
@@ -39,7 +71,10 @@ type Message struct {
 	// Type identifies the kind of message.
 	Type MessageType `json:"type"`
 
-	// Content is the text content (for Text, Error, System messages).
+	// Content is the text content. Holds complete text for Text messages,
+	// error descriptions for Error, delta payloads (text fragment, JSON
+	// fragment, or thinking fragment) for *Delta messages, and status
+	// text for System messages.
 	Content string `json:"content,omitempty"`
 
 	// Tool contains tool invocation details (for ToolUse, ToolResult messages).
