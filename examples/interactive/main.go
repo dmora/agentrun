@@ -132,7 +132,7 @@ func channelClosed(proc agentrun.Process) error {
 // Returns the updated sawDelta state.
 func handleStreamingMessage(msg agentrun.Message, sawDelta bool) bool {
 	switch msg.Type {
-	case agentrun.MessageTextDelta:
+	case agentrun.MessageTextDelta, agentrun.MessageThinkingDelta, agentrun.MessageToolUseDelta:
 		fmt.Print(msg.Content) // live token, no newline
 		return true
 	case agentrun.MessageText:
