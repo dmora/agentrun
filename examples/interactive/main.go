@@ -24,6 +24,8 @@ import (
 	"github.com/dmora/agentrun/engine/cli/claude"
 )
 
+const stopTimeout = 5 * time.Second
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -58,7 +60,7 @@ func run() error {
 		return fmt.Errorf("start: %w", err)
 	}
 	defer func() {
-		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		stopCtx, cancel := context.WithTimeout(context.Background(), stopTimeout)
 		defer cancel()
 		_ = proc.Stop(stopCtx)
 	}()
@@ -98,25 +100,57 @@ func repl(ctx context.Context, proc agentrun.Process) error {
 }
 
 // drainTurn reads messages until MessageResult (turn complete).
-// Prints each message. Returns nil on successful turn completion.
-// MessageError is printed but does not terminate the REPL.
+// Handles streaming deltas for live token display. MessageError is
+// printed but does not terminate the REPL.
 func drainTurn(ctx context.Context, proc agentrun.Process) error {
+	var sawDelta bool
 	for {
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("interrupted: %w", ctx.Err())
 		case msg, ok := <-proc.Output():
 			if !ok {
-				if err := proc.Err(); err != nil {
-					return fmt.Errorf("process exited: %w", err)
-				}
-				return errors.New("process exited unexpectedly")
+				return channelClosed(proc)
 			}
-			printMessage(msg)
+			sawDelta = handleStreamingMessage(msg, sawDelta)
 			if msg.Type == agentrun.MessageResult {
 				return nil // turn complete
 			}
 		}
+	}
+}
+
+// channelClosed returns an appropriate error when the output channel closes.
+func channelClosed(proc agentrun.Process) error {
+	if err := proc.Err(); err != nil {
+		return fmt.Errorf("process exited: %w", err)
+	}
+	return errors.New("process exited unexpectedly")
+}
+
+// handleStreamingMessage prints a message with delta-aware formatting.
+// Returns the updated sawDelta state.
+func handleStreamingMessage(msg agentrun.Message, sawDelta bool) bool {
+	switch msg.Type {
+	case agentrun.MessageTextDelta:
+		fmt.Print(msg.Content) // live token, no newline
+		return true
+	case agentrun.MessageText:
+		if sawDelta {
+			fmt.Println() // newline to cap delta stream
+		} else {
+			printMessage(msg) // no deltas — print full text
+		}
+		return false
+	case agentrun.MessageResult, agentrun.MessageError:
+		if sawDelta {
+			fmt.Println() // newline to cap delta stream
+		}
+		printMessage(msg)
+		return false
+	default:
+		printMessage(msg)
+		return sawDelta
 	}
 }
 

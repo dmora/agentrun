@@ -17,6 +17,7 @@ import (
 	"github.com/dmora/agentrun"
 	"github.com/dmora/agentrun/engine/cli"
 	"github.com/dmora/agentrun/engine/cli/claude"
+	"github.com/dmora/agentrun/filter"
 )
 
 func main() {
@@ -72,15 +73,17 @@ func run() error {
 
 // drainMessages reads all messages from the process, printing each one,
 // and returns an error if the agent reported errors, no response arrived,
-// or the context deadline is exceeded.
+// or the context deadline is exceeded. Uses filter.Completed to drop
+// streaming deltas — this example only cares about complete messages.
 func drainMessages(ctx context.Context, proc agentrun.Process) error {
+	completed := filter.Completed(ctx, proc.Output())
 	var gotResponse bool
 	var agentErr string
 	for {
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("timeout waiting for response: %w", ctx.Err())
-		case msg, ok := <-proc.Output():
+		case msg, ok := <-completed:
 			if !ok {
 				return checkResult(proc, agentErr, gotResponse)
 			}

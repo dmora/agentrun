@@ -52,18 +52,21 @@ func TestSpawnArgs(t *testing.T) {
 		name     string
 		session  agentrun.Session
 		contains []string
+		excludes []string
 		last     string
 	}{
 		{
 			name:     "minimal",
 			session:  agentrun.Session{Prompt: testPrompt},
 			contains: []string{"-p", "--verbose", "--output-format", "stream-json"},
+			excludes: []string{"--include-partial-messages", "--input-format"},
 			last:     testPrompt,
 		},
 		{
 			name:     "with model",
 			session:  agentrun.Session{Model: testModel, Prompt: testPrompt},
 			contains: []string{"--model", testModel},
+			excludes: []string{"--include-partial-messages", "--input-format"},
 			last:     testPrompt,
 		},
 		{
@@ -73,6 +76,7 @@ func TestSpawnArgs(t *testing.T) {
 				Options: map[string]string{OptionSystemPrompt: testSystemPrompt},
 			},
 			contains: []string{"--system-prompt", testSystemPrompt},
+			excludes: []string{"--include-partial-messages", "--input-format"},
 			last:     testPrompt,
 		},
 		{
@@ -82,6 +86,7 @@ func TestSpawnArgs(t *testing.T) {
 				Options: map[string]string{OptionMaxTurns: "5"},
 			},
 			contains: []string{"--max-turns", "5"},
+			excludes: []string{"--include-partial-messages", "--input-format"},
 			last:     testPrompt,
 		},
 		{
@@ -91,6 +96,7 @@ func TestSpawnArgs(t *testing.T) {
 				Options: map[string]string{OptionPermissionMode: string(PermissionAcceptEdits)},
 			},
 			contains: []string{"--permission-mode", "acceptEdits"},
+			excludes: []string{"--include-partial-messages", "--input-format"},
 			last:     testPrompt,
 		},
 		{
@@ -110,7 +116,8 @@ func TestSpawnArgs(t *testing.T) {
 				"--permission-mode", "bypassPermissions",
 				"--max-turns", "10",
 			},
-			last: testPrompt,
+			excludes: []string{"--include-partial-messages", "--input-format"},
+			last:     testPrompt,
 		},
 	}
 
@@ -121,7 +128,7 @@ func TestSpawnArgs(t *testing.T) {
 			if binary != defaultBinary {
 				t.Errorf("binary = %q, want %q", binary, defaultBinary)
 			}
-			assertArgs(t, args, tt.contains, nil, tt.last, false)
+			assertArgs(t, args, tt.contains, tt.excludes, tt.last, false)
 		})
 	}
 }
@@ -953,6 +960,280 @@ func TestParseLine_NullToolInput(t *testing.T) {
 	}
 }
 
+// --- Stream event ParseLine tests ---
+
+func TestParseLine_StreamEventDeltas(t *testing.T) {
+	tests := []struct {
+		name    string
+		line    string
+		wantTyp agentrun.MessageType
+		wantCnt string
+	}{
+		{
+			name:    "text_delta",
+			line:    `{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}}`,
+			wantTyp: agentrun.MessageTextDelta,
+			wantCnt: "hello",
+		},
+		{
+			name:    "input_json_delta",
+			line:    `{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\"key\":"}}}`,
+			wantTyp: agentrun.MessageToolUseDelta,
+			wantCnt: `{"key":`,
+		},
+		{
+			name:    "thinking_delta",
+			line:    `{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"let me consider"}}}`,
+			wantTyp: agentrun.MessageThinkingDelta,
+			wantCnt: "let me consider",
+		},
+	}
+
+	b := New()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg, err := b.ParseLine(tt.line)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if msg.Type != tt.wantTyp {
+				t.Errorf("type = %q, want %q", msg.Type, tt.wantTyp)
+			}
+			if msg.Content != tt.wantCnt {
+				t.Errorf("content = %q, want %q", msg.Content, tt.wantCnt)
+			}
+			assertRawPopulated(t, msg)
+		})
+	}
+}
+
+func TestParseLine_StreamEventLifecycle(t *testing.T) {
+	tests := []struct {
+		name    string
+		line    string
+		wantCnt string
+	}{
+		{"message_start", `{"type":"stream_event","event":{"type":"message_start","message":{"id":"msg_1"}}}`, "stream_event: message_start"},
+		{"content_block_start", `{"type":"stream_event","event":{"type":"content_block_start","index":0}}`, "stream_event: content_block_start"},
+		{"content_block_stop", `{"type":"stream_event","event":{"type":"content_block_stop","index":0}}`, "stream_event: content_block_stop"},
+		{"message_stop", `{"type":"stream_event","event":{"type":"message_stop"}}`, "stream_event: message_stop"},
+		{"message_delta", `{"type":"stream_event","event":{"type":"message_delta","delta":{"stop_reason":"end_turn"}}}`, "stream_event: message_delta"},
+	}
+
+	b := New()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg, err := b.ParseLine(tt.line)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if msg.Type != agentrun.MessageSystem {
+				t.Errorf("type = %q, want %q", msg.Type, agentrun.MessageSystem)
+			}
+			if msg.Content != tt.wantCnt {
+				t.Errorf("content = %q, want %q", msg.Content, tt.wantCnt)
+			}
+			assertRawPopulated(t, msg)
+		})
+	}
+}
+
+func TestParseLine_StreamEventEdgeCases(t *testing.T) {
+	tests := []struct {
+		name    string
+		line    string
+		wantTyp agentrun.MessageType
+		wantCnt string
+	}{
+		{
+			name:    "no event field",
+			line:    `{"type":"stream_event"}`,
+			wantTyp: agentrun.MessageSystem,
+			wantCnt: "stream_event: missing or invalid event field",
+		},
+		{
+			name:    "event as string",
+			line:    `{"type":"stream_event","event":"not_an_object"}`,
+			wantTyp: agentrun.MessageSystem,
+			wantCnt: "stream_event: missing or invalid event field",
+		},
+		{
+			name:    "event as null",
+			line:    `{"type":"stream_event","event":null}`,
+			wantTyp: agentrun.MessageSystem,
+			wantCnt: "stream_event: missing or invalid event field",
+		},
+		{
+			name:    "delta missing from content_block_delta",
+			line:    `{"type":"stream_event","event":{"type":"content_block_delta"}}`,
+			wantTyp: agentrun.MessageSystem,
+			wantCnt: "content_block_delta: missing or invalid delta field",
+		},
+		{
+			name:    "delta as string",
+			line:    `{"type":"stream_event","event":{"type":"content_block_delta","delta":"not_an_object"}}`,
+			wantTyp: agentrun.MessageSystem,
+			wantCnt: "content_block_delta: missing or invalid delta field",
+		},
+		{
+			name:    "delta as null",
+			line:    `{"type":"stream_event","event":{"type":"content_block_delta","delta":null}}`,
+			wantTyp: agentrun.MessageSystem,
+			wantCnt: "content_block_delta: missing or invalid delta field",
+		},
+		{
+			name:    "unknown delta type",
+			line:    `{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"unknown_delta"}}}`,
+			wantTyp: agentrun.MessageSystem,
+			wantCnt: "content_block_delta: unknown delta type: unknown_delta",
+		},
+		{
+			name:    "text_delta with missing text field",
+			line:    `{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta"}}}`,
+			wantTyp: agentrun.MessageTextDelta,
+			wantCnt: "",
+		},
+		{
+			name:    "delta type key absent",
+			line:    `{"type":"stream_event","event":{"type":"content_block_delta","delta":{"other":"field"}}}`,
+			wantTyp: agentrun.MessageSystem,
+			wantCnt: "content_block_delta: unknown delta type: ",
+		},
+		{
+			name:    "empty stream_event object",
+			line:    `{"type":"stream_event","event":{}}`,
+			wantTyp: agentrun.MessageSystem,
+			wantCnt: "stream_event: ",
+		},
+	}
+
+	b := New()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg, err := b.ParseLine(tt.line)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if msg.Type != tt.wantTyp {
+				t.Errorf("type = %q, want %q", msg.Type, tt.wantTyp)
+			}
+			if msg.Content != tt.wantCnt {
+				t.Errorf("content = %q, want %q", msg.Content, tt.wantCnt)
+			}
+			assertRawPopulated(t, msg)
+		})
+	}
+}
+
+// --- StreamArgs partial messages tests ---
+
+func TestStreamArgs_WithSession(t *testing.T) {
+	tests := []struct {
+		name     string
+		session  agentrun.Session
+		contains []string
+		excludes []string
+	}{
+		{
+			name:     "minimal",
+			session:  agentrun.Session{},
+			contains: []string{"--input-format", "stream-json", "--include-partial-messages"},
+		},
+		{
+			name:     "with model",
+			session:  agentrun.Session{Model: testModel},
+			contains: []string{"--model", testModel},
+		},
+		{
+			name: "with system prompt",
+			session: agentrun.Session{
+				Options: map[string]string{OptionSystemPrompt: testSystemPrompt},
+			},
+			contains: []string{"--system-prompt", testSystemPrompt},
+		},
+		{
+			name: "with max turns",
+			session: agentrun.Session{
+				Options: map[string]string{OptionMaxTurns: "5"},
+			},
+			contains: []string{"--max-turns", "5"},
+		},
+		{
+			name: "with permission",
+			session: agentrun.Session{
+				Options: map[string]string{OptionPermissionMode: string(PermissionAcceptEdits)},
+			},
+			contains: []string{"--permission-mode", "acceptEdits"},
+		},
+		{
+			name: "all options",
+			session: agentrun.Session{
+				Model: testModel,
+				Options: map[string]string{
+					OptionSystemPrompt:   testSystemPrompt,
+					OptionPermissionMode: string(PermissionBypassAll),
+					OptionMaxTurns:       "10",
+				},
+			},
+			contains: []string{
+				"--model", testModel,
+				"--system-prompt", testSystemPrompt,
+				"--permission-mode", "bypassPermissions",
+				"--max-turns", "10",
+				"--include-partial-messages",
+			},
+		},
+	}
+
+	b := New()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			binary, args := b.StreamArgs(tt.session)
+			if binary != defaultBinary {
+				t.Errorf("binary = %q, want %q", binary, defaultBinary)
+			}
+			// StreamArgs must not have a trailing prompt.
+			last := args[len(args)-1]
+			if last == testPrompt {
+				t.Errorf("StreamArgs should not have trailing prompt")
+			}
+			assertArgs(t, args, tt.contains, tt.excludes, "", false)
+		})
+	}
+}
+
+func TestStreamArgs_IncludesPartialMessages(t *testing.T) {
+	b := New()
+	_, args := b.StreamArgs(agentrun.Session{})
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--include-partial-messages") {
+		t.Errorf("default StreamArgs should include --include-partial-messages: %v", args)
+	}
+}
+
+func TestStreamArgs_DisablePartialMessages(t *testing.T) {
+	b := New(WithPartialMessages(false))
+	_, args := b.StreamArgs(agentrun.Session{})
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "--include-partial-messages") {
+		t.Errorf("StreamArgs should not include --include-partial-messages when disabled: %v", args)
+	}
+}
+
+func TestNew_WithPartialMessagesFalse(t *testing.T) {
+	b := New(WithPartialMessages(false))
+	if b.partialMessages {
+		t.Error("partialMessages should be false")
+	}
+}
+
+func TestNew_PartialMessagesDefault(t *testing.T) {
+	b := New()
+	if !b.partialMessages {
+		t.Error("partialMessages should default to true")
+	}
+}
+
 // --- Version helper tests ---
 // These test unexported helpers that will move to production code when
 // the Validator interface is added (#68).
@@ -1091,6 +1372,12 @@ func FuzzParseLine(f *testing.F) {
 		`not json`,
 		``,
 		`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"T","input":null}]}}`,
+		`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}}`,
+		`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\"key\":"}}}`,
+		`{"type":"stream_event","event":{"type":"message_start"}}`,
+		`{"type":"stream_event","event":{"type":"content_block_stop"}}`,
+		`{"type":"stream_event"}`,
+		`{"type":"stream_event","event":"not_an_object"}`,
 	}
 	for _, s := range seeds {
 		f.Add(s)

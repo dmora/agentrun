@@ -1,4 +1,4 @@
-.PHONY: qa lint test test-race check cover vet tidy-check vulncheck bench fuzz fmt tidy examples-tidy-check examples-build smoke
+.PHONY: qa lint test test-race check cover vet tidy-check vulncheck bench fuzz fmt tidy examples-tidy-check examples-build smoke smoke-streaming
 
 # ---- Composite targets ----
 
@@ -80,3 +80,7 @@ examples-build:
 smoke:  ## Run Claude smoke test (requires claude CLI, not in qa)
 	@command -v claude >/dev/null 2>&1 || { echo "SKIP smoke: claude binary not found"; exit 0; }
 	cd examples && CLAUDECODE= go run ./simple/  # unset to allow spawning from a Claude Code session
+
+smoke-streaming:  ## Run streaming smoke test (requires claude CLI, not in qa)
+	@command -v claude >/dev/null 2>&1 || { echo "SKIP smoke-streaming: claude binary not found"; exit 0; }
+	cd examples && CLAUDECODE= go run ./interactive/

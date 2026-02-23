@@ -53,7 +53,8 @@ const defaultBinary = "claude"
 // It implements all cli package interfaces: Spawner, Parser, Resumer,
 // Streamer, and InputFormatter.
 type Backend struct {
-	binary string
+	binary          string
+	partialMessages bool // default true — emit token-level streaming deltas
 }
 
 // Compile-time interface satisfaction checks.
@@ -79,10 +80,20 @@ func WithBinary(path string) Option {
 	}
 }
 
+// WithPartialMessages controls whether StreamArgs includes
+// --include-partial-messages for token-level streaming deltas.
+// Default is true (deltas enabled). Set to false to receive only
+// complete messages.
+func WithPartialMessages(enabled bool) Option {
+	return func(b *Backend) {
+		b.partialMessages = enabled
+	}
+}
+
 // New creates a Claude Code CLI backend with the given options.
 // The default binary is "claude".
 func New(opts ...Option) *Backend {
-	b := &Backend{binary: defaultBinary}
+	b := &Backend{binary: defaultBinary, partialMessages: true}
 	for _, opt := range opts {
 		opt(b)
 	}
@@ -105,9 +116,14 @@ func (b *Backend) SpawnArgs(session agentrun.Session) (string, []string) {
 
 // StreamArgs builds exec.Cmd arguments for a long-lived streaming session.
 // Adds --input-format stream-json and omits the trailing prompt.
+// When partial messages are enabled (default), adds --include-partial-messages
+// for token-level streaming deltas.
 func (b *Backend) StreamArgs(session agentrun.Session) (string, []string) {
 	args := baseArgs()
 	args = append(args, "--input-format", "stream-json")
+	if b.partialMessages {
+		args = append(args, "--include-partial-messages")
+	}
 	args = appendSessionArgs(args, session)
 	return b.binary, args
 }

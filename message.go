@@ -32,6 +32,20 @@ const (
 
 	// MessageEOF signals the end of the message stream.
 	MessageEOF MessageType = "eof"
+
+	// MessageTextDelta is a partial text token from streaming output.
+	// Content holds the text fragment. Emitted when the backend supports
+	// streaming and partial messages are enabled (default for Claude).
+	MessageTextDelta MessageType = "text_delta"
+
+	// MessageToolUseDelta is partial tool use input JSON from streaming output.
+	// Content holds a JSON fragment. Emitted during incremental tool input.
+	MessageToolUseDelta MessageType = "tool_use_delta"
+
+	// MessageThinkingDelta is partial thinking content from streaming output.
+	// Content holds a thinking text fragment.
+	// Note: Not yet empirically verified in Claude CLI output.
+	MessageThinkingDelta MessageType = "thinking_delta"
 )
 
 // Message is a structured output from an agent process.
@@ -39,7 +53,10 @@ type Message struct {
 	// Type identifies the kind of message.
 	Type MessageType `json:"type"`
 
-	// Content is the text content (for Text, Error, System messages).
+	// Content is the text content. Holds complete text for Text messages,
+	// error descriptions for Error, delta payloads (text fragment, JSON
+	// fragment, or thinking fragment) for *Delta messages, and status
+	// text for System messages.
 	Content string `json:"content,omitempty"`
 
 	// Tool contains tool invocation details (for ToolUse, ToolResult messages).

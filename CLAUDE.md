@@ -39,6 +39,7 @@ agentrun is a **two-layer engine pattern**:
 
 ```
 agentrun (interfaces)
+├── filter/              ← Composable channel middleware (Completed, Filter, ResultOnly)
 ├── engine/cli/          ← CLIEngine: subprocess transport adapter
 │   ├── interfaces.go    ← Spawner, Parser, Resumer, Streamer, InputFormatter, Backend
 │   ├── engine.go        ← Engine, NewEngine, Validate, Start (!windows)
@@ -56,6 +57,7 @@ agentrun (interfaces)
 | Package | Purpose |
 |---------|---------|
 | `agentrun` | Root: Engine, Process, Session, Message interfaces/types |
+| `filter` | Composable channel middleware for message streams (Completed, Filter, ResultOnly, IsDelta) |
 | `engine/cli` | CLI subprocess engine: Backend→Engine adapter, process lifecycle, signal handling |
 | `engine/cli/claude` | Claude Code backend (all 5 cli interfaces: Spawner, Parser, Resumer, Streamer, InputFormatter) |
 | `engine/cli/opencode` | OpenCode backend (stub) |

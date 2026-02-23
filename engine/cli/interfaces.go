@@ -49,8 +49,10 @@ type Resumer interface {
 }
 
 // Streamer builds a long-lived streaming command that attaches to a
-// subprocess for continuous output. Streamer is optional — the CLIEngine
-// discovers it via type assertion:
+// subprocess for continuous output. When a backend implements Streamer,
+// the initial prompt is NOT included in the command args — the caller
+// must send it explicitly via Process.Send after Start returns.
+// Streamer is optional — the CLIEngine discovers it via type assertion:
 //
 //	if s, ok := backend.(Streamer); ok {
 //	    binary, args := s.StreamArgs(session)
