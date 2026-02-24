@@ -5,13 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"strings"
 
 	"github.com/dmora/agentrun"
 	"github.com/dmora/agentrun/engine/cli"
+	"github.com/dmora/agentrun/engine/cli/internal/jsonutil"
 )
 
 // Session option keys specific to the Claude CLI backend.
+// Namespaced with "claude." to prevent collision across backends.
 // Cross-cutting options (OptionSystemPrompt, OptionMaxTurns,
 // OptionThinkingBudget) are defined in the root agentrun package.
 const (
@@ -20,11 +21,11 @@ const (
 	// This stays in the claude package (not root) because permission modes
 	// are Claude CLI-specific — other backends have different or no
 	// permission models. See DESIGN.md decision rule.
-	OptionPermissionMode = "permission_mode"
+	OptionPermissionMode = "claude.permission_mode"
 
 	// OptionResumeID is the Claude conversation ID for --resume.
 	// Only valid in ResumeArgs; SpawnArgs ignores this key.
-	OptionResumeID = "resume_id"
+	OptionResumeID = "claude.resume_id"
 )
 
 // PermissionMode controls Claude Code's permission behavior.
@@ -107,7 +108,7 @@ func (b *Backend) SpawnArgs(session agentrun.Session) (string, []string) {
 	args = appendSessionArgs(args, session)
 	// Prompt is always the last positional argument.
 	// Null-byte-containing prompts are silently omitted (no error return).
-	if !containsNull(session.Prompt) {
+	if !jsonutil.ContainsNull(session.Prompt) {
 		args = append(args, session.Prompt)
 	}
 	return b.binary, args
@@ -136,10 +137,10 @@ func (b *Backend) ResumeArgs(session agentrun.Session, initialPrompt string) (st
 	if resumeID == "" {
 		return "", nil, errors.New("claude: missing resume_id in session options")
 	}
-	if containsNull(resumeID) {
+	if jsonutil.ContainsNull(resumeID) {
 		return "", nil, errors.New("claude: resume_id contains null bytes")
 	}
-	if containsNull(initialPrompt) {
+	if jsonutil.ContainsNull(initialPrompt) {
 		return "", nil, errors.New("claude: initial prompt contains null bytes")
 	}
 
@@ -157,7 +158,7 @@ func (b *Backend) ResumeArgs(session agentrun.Session, initialPrompt string) (st
 // FormatInput encodes a user message for delivery to a Claude stdin pipe.
 // Returns an error if the message contains null bytes.
 func (b *Backend) FormatInput(message string) ([]byte, error) {
-	if containsNull(message) {
+	if jsonutil.ContainsNull(message) {
 		return nil, errors.New("claude: message contains null bytes")
 	}
 	stdinMsg := map[string]any{
@@ -183,11 +184,6 @@ func baseArgs() []string {
 	}
 }
 
-// containsNull reports whether s contains a null byte.
-func containsNull(s string) bool {
-	return strings.ContainsRune(s, '\x00')
-}
-
 // validatePositiveInt checks that opts[key], if non-empty, is a valid positive
 // integer with no null bytes. Returns an error with the given label for
 // diagnostics. Used by ResumeArgs for strict pre-validation.
@@ -196,7 +192,7 @@ func validatePositiveInt(opts map[string]string, key, label string) error {
 	if v == "" {
 		return nil
 	}
-	if containsNull(v) {
+	if jsonutil.ContainsNull(v) {
 		return fmt.Errorf("claude: %s contains null bytes", label)
 	}
 	if n, err := strconv.Atoi(v); err != nil || n <= 0 {
@@ -211,7 +207,7 @@ func validatePositiveInt(opts map[string]string, key, label string) error {
 // only clean integers reach the CLI.
 func appendPositiveInt(args []string, opts map[string]string, key, flag string) []string {
 	v := opts[key]
-	if v == "" || containsNull(v) {
+	if v == "" || jsonutil.ContainsNull(v) {
 		return args
 	}
 	if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -224,11 +220,11 @@ func appendPositiveInt(args []string, opts map[string]string, key, flag string) 
 // max-turns, and max-thinking-tokens flags based on session fields
 // and options. Invalid or null-byte-containing values are silently skipped.
 func appendSessionArgs(args []string, session agentrun.Session) []string {
-	if session.Model != "" && !containsNull(session.Model) {
+	if session.Model != "" && !jsonutil.ContainsNull(session.Model) {
 		args = append(args, "--model", session.Model)
 	}
 
-	if sp := session.Options[agentrun.OptionSystemPrompt]; sp != "" && !containsNull(sp) {
+	if sp := session.Options[agentrun.OptionSystemPrompt]; sp != "" && !jsonutil.ContainsNull(sp) {
 		args = append(args, "--system-prompt", sp)
 	}
 

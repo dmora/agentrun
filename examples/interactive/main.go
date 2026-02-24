@@ -1,17 +1,23 @@
 //go:build !windows
 
-// Command interactive demonstrates multi-turn streaming conversations
-// with agentrun. It starts a Claude session and runs a REPL loop,
-// sending user input and printing streamed responses.
+// Command interactive demonstrates multi-turn conversations with agentrun.
+// It supports both Claude and OpenCode backends via the --backend flag.
 //
-// Requires the claude CLI on PATH.
-// Run via: cd examples && CLAUDECODE= go run ./interactive/
+// Claude uses streaming stdin; OpenCode uses spawn-per-turn with --session.
+// The engine handles this distinction automatically — the example detects
+// the backend's capabilities to manage turn-completion semantics.
+//
+// Run via:
+//
+//	cd examples && go run ./interactive/ --backend claude
+//	cd examples && go run ./interactive/ --backend opencode
 package main
 
 import (
 	"bufio"
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -22,20 +28,27 @@ import (
 	"github.com/dmora/agentrun"
 	"github.com/dmora/agentrun/engine/cli"
 	"github.com/dmora/agentrun/engine/cli/claude"
+	"github.com/dmora/agentrun/engine/cli/opencode"
 	"github.com/dmora/agentrun/examples/internal/display"
 )
 
 const stopTimeout = 5 * time.Second
 
 func main() {
-	if err := run(); err != nil {
+	backendFlag := flag.String("backend", "claude", "backend to use: claude or opencode")
+	flag.Parse()
+
+	if err := run(*backendFlag); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
-	backend := claude.New()
+func run(backendName string) error {
+	backend, err := makeBackend(backendName)
+	if err != nil {
+		return err
+	}
 	engine := cli.NewEngine(backend)
 	if err := engine.Validate(); err != nil {
 		return fmt.Errorf("engine unavailable: %w", err)
@@ -49,8 +62,23 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Read first prompt before Start() — spawn backends need it in args.
+	scanner := bufio.NewScanner(os.Stdin)
+	fmt.Println("agentrun interactive example (type 'exit' to quit)")
+	fmt.Print("\nyou> ")
+	if !scanner.Scan() {
+		fmt.Println("\nbye")
+		return nil
+	}
+	firstPrompt := strings.TrimSpace(scanner.Text())
+	if firstPrompt == "" || firstPrompt == "exit" || firstPrompt == "quit" {
+		fmt.Println("\nbye")
+		return nil
+	}
+
 	session := agentrun.Session{
-		CWD: cwd,
+		CWD:    cwd,
+		Prompt: firstPrompt,
 		Options: map[string]string{
 			agentrun.OptionMode: string(agentrun.ModePlan),
 		},
@@ -66,14 +94,44 @@ func run() error {
 		_ = proc.Stop(stopCtx)
 	}()
 
-	fmt.Println("agentrun interactive example (type 'exit' to quit)")
-	return repl(ctx, proc)
+	// Determine turn-completion mode.
+	// Streaming backends (Claude): one MessageResult per turn.
+	// Spawn-per-turn backends (OpenCode): multiple step_finish events per turn;
+	// the turn is complete when the subprocess exits (channel closes).
+	_, isStreamer := backend.(cli.Streamer)
+	spawnPerTurn := !isStreamer
+
+	// Streaming backends need first prompt sent explicitly via stdin.
+	// Spawn backends already have the prompt baked into the command args.
+	if isStreamer {
+		if err := proc.Send(ctx, firstPrompt); err != nil {
+			return fmt.Errorf("send first prompt: %w", err)
+		}
+	}
+
+	// Drain first turn.
+	if err := drainTurn(ctx, proc, spawnPerTurn); err != nil {
+		return err
+	}
+
+	return repl(ctx, proc, scanner, spawnPerTurn)
+}
+
+// makeBackend creates a CLI backend by name.
+func makeBackend(name string) (cli.Backend, error) {
+	switch name {
+	case "claude":
+		return claude.New(), nil
+	case "opencode":
+		return opencode.New(), nil
+	default:
+		return nil, fmt.Errorf("unknown backend %q (valid: claude, opencode)", name)
+	}
 }
 
 // repl runs the read-eval-print loop, reading user input from stdin
 // and sending it to the process until exit, quit, or EOF.
-func repl(ctx context.Context, proc agentrun.Process) error {
-	scanner := bufio.NewScanner(os.Stdin)
+func repl(ctx context.Context, proc agentrun.Process, scanner *bufio.Scanner, spawnPerTurn bool) error {
 	for {
 		fmt.Print("\nyou> ")
 		if !scanner.Scan() {
@@ -91,7 +149,7 @@ func repl(ctx context.Context, proc agentrun.Process) error {
 			return fmt.Errorf("send: %w", err)
 		}
 
-		if err := drainTurn(ctx, proc); err != nil {
+		if err := drainTurn(ctx, proc, spawnPerTurn); err != nil {
 			return err
 		}
 	}
@@ -100,10 +158,14 @@ func repl(ctx context.Context, proc agentrun.Process) error {
 	return nil
 }
 
-// drainTurn reads messages until MessageResult (turn complete).
-// Handles streaming deltas for live token display. MessageError is
-// printed but does not terminate the REPL.
-func drainTurn(ctx context.Context, proc agentrun.Process) error {
+// drainTurn reads messages until the turn is complete.
+//
+// For streaming backends (spawnPerTurn=false), a turn ends with a single
+// MessageResult event. For spawn-per-turn backends (spawnPerTurn=true),
+// a turn may contain multiple step_finish (MessageResult) events — one per
+// agent step — so the turn is complete when the output channel closes
+// (the subprocess exits after producing all events).
+func drainTurn(ctx context.Context, proc agentrun.Process, spawnPerTurn bool) error {
 	var sawDelta bool
 	for {
 		select {
@@ -111,20 +173,25 @@ func drainTurn(ctx context.Context, proc agentrun.Process) error {
 			return fmt.Errorf("interrupted: %w", ctx.Err())
 		case msg, ok := <-proc.Output():
 			if !ok {
-				return channelClosed(proc)
+				return turnClosed(proc, spawnPerTurn)
 			}
 			sawDelta = handleStreamingMessage(msg, sawDelta)
-			if msg.Type == agentrun.MessageResult {
+			if !spawnPerTurn && msg.Type == agentrun.MessageResult {
 				return nil // turn complete
 			}
 		}
 	}
 }
 
-// channelClosed returns an appropriate error when the output channel closes.
-func channelClosed(proc agentrun.Process) error {
+// turnClosed handles output channel closure based on backend mode.
+// Spawn-per-turn: clean exit (nil err) is a normal turn boundary.
+// Streaming: channel closure is always unexpected.
+func turnClosed(proc agentrun.Process, spawnPerTurn bool) error {
 	if err := proc.Err(); err != nil {
 		return fmt.Errorf("process exited: %w", err)
+	}
+	if spawnPerTurn {
+		return nil // expected: subprocess exited, turn complete
 	}
 	return errors.New("process exited unexpectedly")
 }
