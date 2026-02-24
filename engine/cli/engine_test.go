@@ -98,6 +98,23 @@ func (b *testStreamerOnlyBackend) StreamArgs(s agentrun.Session) (string, []stri
 	return b.streamFn(s)
 }
 
+// testStreamerResumerBackend has Streamer+Resumer but no InputFormatter.
+// Used to test that Start falls back to SpawnArgs mode when the streaming
+// path is incomplete.
+type testStreamerResumerBackend struct {
+	testBackend
+	streamFn func(agentrun.Session) (string, []string)
+	resumeFn func(agentrun.Session, string) (string, []string, error)
+}
+
+func (b *testStreamerResumerBackend) StreamArgs(s agentrun.Session) (string, []string) {
+	return b.streamFn(s)
+}
+
+func (b *testStreamerResumerBackend) ResumeArgs(s agentrun.Session, prompt string) (string, []string, error) {
+	return b.resumeFn(s, prompt)
+}
+
 // echoBackend returns a minimal backend (Spawner+Parser only) that spawns
 // "echo" with session.Prompt. Has no send capability — Start() will reject it.
 // Use echoResumerBackend() for tests that need Start() to succeed.
@@ -818,6 +835,39 @@ func TestStart_StreamerWithFormatterHasSendCapability(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	_ = p.Stop(ctx)
+}
+
+func TestStart_StreamerResumerWithoutFormatter_FallsBackToSpawn(t *testing.T) {
+	streamCalled := false
+	b := &testStreamerResumerBackend{
+		testBackend: testBackend{
+			spawnFn: func(s agentrun.Session) (string, []string) {
+				return binEcho, []string{s.Prompt}
+			},
+			parseFn: textParser,
+		},
+		streamFn: func(_ agentrun.Session) (string, []string) {
+			streamCalled = true
+			return binCat, nil
+		},
+		resumeFn: func(s agentrun.Session, _ string) (string, []string, error) {
+			bin, args := s.Prompt, []string{}
+			return bin, args, nil
+		},
+	}
+	eng := cli.NewEngine(b)
+	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t), Prompt: "hello"})
+	if err != nil {
+		t.Fatalf("Start should succeed (Resumer available): %v", err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = p.Stop(ctx)
+	}()
+	if streamCalled {
+		t.Error("StreamArgs should not be called when InputFormatter is missing")
+	}
 }
 
 // ---------------------------------------------------------------------------

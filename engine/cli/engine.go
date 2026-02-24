@@ -87,10 +87,13 @@ func (e *Engine) Start(_ context.Context, session agentrun.Session, opts ...agen
 		return nil, err
 	}
 
-	// Determine mode: Streamer (stdin pipe) or one-shot (SpawnArgs).
+	// Determine mode: Streamer (stdin pipe) requires both Streamer and
+	// InputFormatter. Without a formatter, fall back to SpawnArgs even
+	// if Streamer is present (Resumer handles subsequent Send calls).
+	useStreamer := caps.streamer != nil && caps.formatter != nil
 	var binary string
 	var args []string
-	if caps.streamer != nil {
+	if useStreamer {
 		binary, args = caps.streamer.StreamArgs(session)
 	} else {
 		binary, args = e.backend.SpawnArgs(session)
@@ -101,7 +104,7 @@ func (e *Engine) Start(_ context.Context, session agentrun.Session, opts ...agen
 		return nil, fmt.Errorf("%w: %s: %w", agentrun.ErrUnavailable, binary, err)
 	}
 
-	cmd, stdin, stdout, err := spawnCmd(resolvedBinary, args, session.CWD, caps.streamer != nil)
+	cmd, stdin, stdout, err := spawnCmd(resolvedBinary, args, session.CWD, useStreamer)
 	if err != nil {
 		return nil, fmt.Errorf("cli: start: %w", err)
 	}
