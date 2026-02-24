@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 
 	"github.com/dmora/agentrun"
@@ -14,7 +15,8 @@ import (
 // Session option keys specific to the Claude CLI backend.
 // Namespaced with "claude." to prevent collision across backends.
 // Cross-cutting options (OptionSystemPrompt, OptionMaxTurns,
-// OptionThinkingBudget) are defined in the root agentrun package.
+// OptionThinkingBudget, OptionResumeID) are defined in the root
+// agentrun package.
 const (
 	// OptionPermissionMode sets the Claude Code --permission-mode flag.
 	// Values should be PermissionMode constants.
@@ -22,11 +24,11 @@ const (
 	// are Claude CLI-specific — other backends have different or no
 	// permission models. See DESIGN.md decision rule.
 	OptionPermissionMode = "claude.permission_mode"
-
-	// OptionResumeID is the Claude conversation ID for --resume.
-	// Only valid in ResumeArgs; SpawnArgs ignores this key.
-	OptionResumeID = "claude.resume_id"
 )
+
+// validResumeID matches safe Claude session identifiers.
+// Positive allowlist prevents control characters in CLI arguments.
+var validResumeID = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
 
 // PermissionMode controls Claude Code's permission behavior.
 type PermissionMode string
@@ -101,6 +103,8 @@ func New(opts ...Option) *Backend {
 }
 
 // SpawnArgs builds exec.Cmd arguments for a new Claude session.
+// OptionResumeID is intentionally ignored here — resume is handled by
+// StreamArgs (streaming path) or ResumeArgs (subprocess replacement).
 // Invalid option values are silently skipped (SpawnArgs must not fail per
 // the Spawner interface contract).
 func (b *Backend) SpawnArgs(session agentrun.Session) (string, []string) {
@@ -118,27 +122,32 @@ func (b *Backend) SpawnArgs(session agentrun.Session) (string, []string) {
 // Adds --input-format stream-json and omits the trailing prompt.
 // When partial messages are enabled (default), adds --include-partial-messages
 // for token-level streaming deltas.
+// When OptionResumeID is set and valid, adds --resume to resume an existing
+// conversation over the streaming connection.
 func (b *Backend) StreamArgs(session agentrun.Session) (string, []string) {
 	args := baseArgs()
 	args = append(args, "--input-format", "stream-json")
 	if b.partialMessages {
 		args = append(args, "--include-partial-messages")
 	}
+	if id := session.Options[agentrun.OptionResumeID]; id != "" && validateResumeID(id) == nil {
+		args = append(args, "--resume", id)
+	}
 	args = appendSessionArgs(args, session)
 	return b.binary, args
 }
 
 // ResumeArgs builds exec.Cmd arguments to resume an existing Claude session.
-// Returns an error if OptionResumeID is missing, contains null bytes, or
-// permission mode is invalid. Unlike SpawnArgs/StreamArgs, ResumeArgs
-// validates strictly because it has an error return.
+// Returns an error if OptionResumeID is missing, contains null bytes, has
+// an invalid format, or permission mode is invalid. Unlike SpawnArgs/StreamArgs,
+// ResumeArgs validates strictly because it has an error return.
 func (b *Backend) ResumeArgs(session agentrun.Session, initialPrompt string) (string, []string, error) {
-	resumeID := session.Options[OptionResumeID]
+	resumeID := session.Options[agentrun.OptionResumeID]
 	if resumeID == "" {
 		return "", nil, errors.New("claude: missing resume_id in session options")
 	}
-	if jsonutil.ContainsNull(resumeID) {
-		return "", nil, errors.New("claude: resume_id contains null bytes")
+	if err := validateResumeID(resumeID); err != nil {
+		return "", nil, err
 	}
 	if jsonutil.ContainsNull(initialPrompt) {
 		return "", nil, errors.New("claude: initial prompt contains null bytes")
@@ -153,6 +162,16 @@ func (b *Backend) ResumeArgs(session agentrun.Session, initialPrompt string) (st
 	args = appendSessionArgs(args, session)
 	args = append(args, initialPrompt)
 	return b.binary, args, nil
+}
+
+// validateResumeID reports whether id matches the safe character allowlist
+// for Claude session identifiers. Prevents control characters and other
+// unsafe content from reaching CLI arguments.
+func validateResumeID(id string) error {
+	if !validResumeID.MatchString(id) {
+		return fmt.Errorf("claude: invalid resume_id format: %q", id)
+	}
+	return nil
 }
 
 // FormatInput encodes a user message for delivery to a Claude stdin pipe.

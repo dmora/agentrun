@@ -98,6 +98,34 @@ func TestSpawnArgs(t *testing.T) {
 	}
 }
 
+func TestSpawnArgs_WithResumeID(t *testing.T) {
+	b := New()
+	_, args := b.SpawnArgs(agentrun.Session{
+		Prompt:  "hi",
+		Options: map[string]string{agentrun.OptionResumeID: testSessionID},
+	})
+	assertContains(t, args, "--session")
+	assertContains(t, args, testSessionID)
+}
+
+func TestSpawnArgs_ResumeID_InvalidSkipped(t *testing.T) {
+	b := New()
+	_, args := b.SpawnArgs(agentrun.Session{
+		Prompt:  "hi",
+		Options: map[string]string{agentrun.OptionResumeID: "not-valid-format"},
+	})
+	assertNotContains(t, args, "--session")
+}
+
+func TestSpawnArgs_ResumeID_NullByteSkipped(t *testing.T) {
+	b := New()
+	_, args := b.SpawnArgs(agentrun.Session{
+		Prompt:  "hi",
+		Options: map[string]string{agentrun.OptionResumeID: "ses_abc\x00evil1234567890123"},
+	})
+	assertNotContains(t, args, "--session")
+}
+
 func TestSpawnArgs_TitleOverLimit(t *testing.T) {
 	longTitle := strings.Repeat("x", maxTitleLen+1)
 	b := New()
@@ -198,10 +226,10 @@ func TestResumeArgs_StoredSessionID(t *testing.T) {
 	}
 }
 
-func TestResumeArgs_OptionSessionID(t *testing.T) {
+func TestResumeArgs_OptionResumeID(t *testing.T) {
 	b := New()
 	_, args, err := b.ResumeArgs(agentrun.Session{
-		Options: map[string]string{OptionSessionID: "ses_explicit123456789012345"},
+		Options: map[string]string{agentrun.OptionResumeID: "ses_explicit123456789012345"},
 	}, "msg")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -215,7 +243,7 @@ func TestResumeArgs_StoredTakesPrecedence(t *testing.T) {
 	b.sessionID.CompareAndSwap(nil, &stored)
 
 	_, args, err := b.ResumeArgs(agentrun.Session{
-		Options: map[string]string{OptionSessionID: "ses_option12345678901234567"},
+		Options: map[string]string{agentrun.OptionResumeID: "ses_option12345678901234567"},
 	}, "msg")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -236,12 +264,12 @@ func TestResumeArgs_NoSessionID(t *testing.T) {
 func TestResumeArgs_NullByteSessionID(t *testing.T) {
 	b := New()
 	_, _, err := b.ResumeArgs(agentrun.Session{
-		Options: map[string]string{OptionSessionID: "ses_abc\x00def"},
+		Options: map[string]string{agentrun.OptionResumeID: "ses_abc\x00def"},
 	}, "msg")
 	if err == nil {
 		t.Fatal("expected error for null-byte session ID")
 	}
-	assertStringContains(t, err.Error(), "null bytes")
+	assertStringContains(t, err.Error(), "invalid session ID format")
 }
 
 func TestResumeArgs_NullByteMessage(t *testing.T) {
@@ -324,7 +352,7 @@ func TestResumeArgs_IgnoredOptions(t *testing.T) {
 func TestResumeArgs_InvalidSessionIDFormat(t *testing.T) {
 	b := New()
 	_, _, err := b.ResumeArgs(agentrun.Session{
-		Options: map[string]string{OptionSessionID: "not-a-valid-session-id"},
+		Options: map[string]string{agentrun.OptionResumeID: "not-a-valid-session-id"},
 	}, "msg")
 	if err == nil {
 		t.Fatal("expected error for invalid session ID format")
@@ -386,6 +414,39 @@ func Test_validateSessionID(t *testing.T) {
 			err := validateSessionID(tt.id)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("validateSessionID(%q) error = %v, wantErr %v", tt.id, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// --- resolveSessionID precedence ---
+
+func TestResolveSessionID_Precedence(t *testing.T) {
+	tests := []struct {
+		name    string
+		stored  string
+		optVal  string
+		want    string
+		wantSrc string
+	}{
+		{"stored only", "ses_stored12345678901234567", "", "ses_stored12345678901234567", "stored"},
+		{"option only", "", "ses_option12345678901234567", "ses_option12345678901234567", "option"},
+		{"stored wins", "ses_stored12345678901234567", "ses_option12345678901234567", "ses_stored12345678901234567", "stored"},
+		{"neither", "", "", "", "empty"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := New()
+			if tt.stored != "" {
+				b.sessionID.CompareAndSwap(nil, &tt.stored)
+			}
+			session := agentrun.Session{}
+			if tt.optVal != "" {
+				session.Options = map[string]string{agentrun.OptionResumeID: tt.optVal}
+			}
+			got := b.resolveSessionID(session)
+			if got != tt.want {
+				t.Errorf("resolveSessionID() = %q, want %q (%s)", got, tt.want, tt.wantSrc)
 			}
 		})
 	}
