@@ -14,4 +14,9 @@ var (
 
 	// ErrSessionNotFound indicates the requested session does not exist.
 	ErrSessionNotFound = errors.New("agentrun: session not found")
+
+	// ErrSendNotSupported indicates the engine's backend cannot fulfill
+	// Process.Send (no Streamer+InputFormatter or Resumer capability).
+	// Returned by Engine.Start when the backend lacks a send path.
+	ErrSendNotSupported = errors.New("agentrun: send not supported")
 )

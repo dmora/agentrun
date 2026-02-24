@@ -131,13 +131,15 @@ func (p *process) Send(ctx context.Context, message string) error {
 		return p.replaceSubprocess(ctx, message)
 	}
 
-	return errors.New("cli: backend supports neither Streamer nor Resumer for Send")
+	// Defensive guard — Start() validates send capability; unreachable.
+	return fmt.Errorf("%w: no send path available", agentrun.ErrSendNotSupported)
 }
 
 // sendStdin formats and writes a message to the subprocess stdin pipe.
 func (p *process) sendStdin(message string) error {
 	if p.caps.formatter == nil {
-		return errors.New("cli: streaming mode but backend does not implement InputFormatter")
+		// Defensive guard — Start() validates send capability; unreachable.
+		return fmt.Errorf("%w: InputFormatter missing", agentrun.ErrSendNotSupported)
 	}
 	data, err := p.caps.formatter.FormatInput(message)
 	if err != nil {

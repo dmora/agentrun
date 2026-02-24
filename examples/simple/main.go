@@ -54,8 +54,7 @@ func run() error {
 		Options: map[string]string{
 			// Cross-cutting options (root vocabulary).
 			agentrun.OptionMaxTurns: "1",
-			// Claude-specific options (backend dialect).
-			claude.OptionPermissionMode: string(claude.PermissionPlan),
+			agentrun.OptionMode:     string(agentrun.ModePlan),
 		},
 	}
 

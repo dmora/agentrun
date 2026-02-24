@@ -98,14 +98,50 @@ func (b *testStreamerOnlyBackend) StreamArgs(s agentrun.Session) (string, []stri
 	return b.streamFn(s)
 }
 
-// echoBackend returns a backend that spawns "echo" with session.Prompt
-// and parses each line as a text message.
+// testStreamerResumerBackend has Streamer+Resumer but no InputFormatter.
+// Used to test that Start falls back to SpawnArgs mode when the streaming
+// path is incomplete.
+type testStreamerResumerBackend struct {
+	testBackend
+	streamFn func(agentrun.Session) (string, []string)
+	resumeFn func(agentrun.Session, string) (string, []string, error)
+}
+
+func (b *testStreamerResumerBackend) StreamArgs(s agentrun.Session) (string, []string) {
+	return b.streamFn(s)
+}
+
+func (b *testStreamerResumerBackend) ResumeArgs(s agentrun.Session, prompt string) (string, []string, error) {
+	return b.resumeFn(s, prompt)
+}
+
+// echoBackend returns a minimal backend (Spawner+Parser only) that spawns
+// "echo" with session.Prompt. Has no send capability — Start() will reject it.
+// Use echoResumerBackend() for tests that need Start() to succeed.
 func echoBackend() *testBackend {
 	return &testBackend{
 		spawnFn: func(s agentrun.Session) (string, []string) {
 			return binEcho, []string{s.Prompt}
 		},
 		parseFn: textParser,
+	}
+}
+
+// echoResumerBackend returns a backend with Resumer capability that spawns
+// "echo" with session.Prompt. Satisfies Start()'s send capability requirement.
+func echoResumerBackend() *testResumerBackend {
+	return withResumer(*echoBackend())
+}
+
+// withResumer wraps a testBackend with Resumer capability, using spawnFn
+// as the resume function.
+func withResumer(tb testBackend) *testResumerBackend {
+	return &testResumerBackend{
+		testBackend: tb,
+		resumeFn: func(s agentrun.Session, _ string) (string, []string, error) {
+			bin, args := tb.spawnFn(s)
+			return bin, args, nil
+		},
 	}
 }
 
@@ -170,7 +206,7 @@ func TestValidate_PanicRecovery(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestStart_Echo(t *testing.T) {
-	eng := cli.NewEngine(echoBackend())
+	eng := cli.NewEngine(echoResumerBackend())
 	ctx := testCtx(t)
 
 	p, err := eng.Start(ctx, agentrun.Session{
@@ -194,12 +230,12 @@ func TestStart_Echo(t *testing.T) {
 }
 
 func TestStart_MultiLine(t *testing.T) {
-	b := &testBackend{
+	b := withResumer(testBackend{
 		spawnFn: func(_ agentrun.Session) (string, []string) {
 			return "printf", []string{"line1\nline2\nline3\n"}
 		},
 		parseFn: textParser,
-	}
+	})
 	eng := cli.NewEngine(b)
 	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t)})
 	if err != nil {
@@ -238,13 +274,13 @@ func TestStart_OptionOverrides(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var captured string
-			b := &testBackend{
+			b := withResumer(testBackend{
 				spawnFn: func(s agentrun.Session) (string, []string) {
 					captured = tt.extract(s)
 					return binEcho, []string{"x"}
 				},
 				parseFn: textParser,
-			}
+			})
 			tt.session.CWD = tempDir(t)
 			eng := cli.NewEngine(b)
 			p, err := eng.Start(testCtx(t), tt.session, tt.opt)
@@ -262,7 +298,7 @@ func TestStart_OptionOverrides(t *testing.T) {
 }
 
 func TestStart_InvalidCWD_Empty(t *testing.T) {
-	eng := cli.NewEngine(echoBackend())
+	eng := cli.NewEngine(echoResumerBackend())
 	_, err := eng.Start(testCtx(t), agentrun.Session{CWD: ""})
 	if err == nil {
 		t.Fatal("expected error for empty CWD")
@@ -270,7 +306,7 @@ func TestStart_InvalidCWD_Empty(t *testing.T) {
 }
 
 func TestStart_InvalidCWD_Relative(t *testing.T) {
-	eng := cli.NewEngine(echoBackend())
+	eng := cli.NewEngine(echoResumerBackend())
 	_, err := eng.Start(testCtx(t), agentrun.Session{CWD: "relative/path"})
 	if err == nil {
 		t.Fatal("expected error for relative CWD")
@@ -278,7 +314,7 @@ func TestStart_InvalidCWD_Relative(t *testing.T) {
 }
 
 func TestStart_InvalidCWD_NonExistent(t *testing.T) {
-	eng := cli.NewEngine(echoBackend())
+	eng := cli.NewEngine(echoResumerBackend())
 	_, err := eng.Start(testCtx(t), agentrun.Session{CWD: "/nonexistent/path/xyz"})
 	if err == nil {
 		t.Fatal("expected error for non-existent CWD")
@@ -286,12 +322,12 @@ func TestStart_InvalidCWD_NonExistent(t *testing.T) {
 }
 
 func TestStart_ContextCanceled(t *testing.T) {
-	b := &testBackend{
+	b := withResumer(testBackend{
 		spawnFn: func(_ agentrun.Session) (string, []string) {
 			return binSleep, []string{"60"}
 		},
 		parseFn: textParser,
-	}
+	})
 	eng := cli.NewEngine(b)
 	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t)})
 	if err != nil {
@@ -309,7 +345,7 @@ func TestStart_ContextCanceled(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestOutput_ClosedAfterExit(t *testing.T) {
-	eng := cli.NewEngine(echoBackend())
+	eng := cli.NewEngine(echoResumerBackend())
 	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t), Prompt: "x"})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -326,12 +362,12 @@ func TestOutput_ClosedAfterExit(t *testing.T) {
 }
 
 func TestOutput_DrainAfterStop(t *testing.T) {
-	b := &testBackend{
+	b := withResumer(testBackend{
 		spawnFn: func(_ agentrun.Session) (string, []string) {
 			return binSleep, []string{"60"}
 		},
 		parseFn: textParser,
-	}
+	})
 	eng := cli.NewEngine(b)
 	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t)})
 	if err != nil {
@@ -351,12 +387,12 @@ func TestOutput_DrainAfterStop(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestStop_Graceful(t *testing.T) {
-	b := &testBackend{
+	b := withResumer(testBackend{
 		spawnFn: func(_ agentrun.Session) (string, []string) {
 			return binSleep, []string{"60"}
 		},
 		parseFn: textParser,
-	}
+	})
 	eng := cli.NewEngine(b)
 	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t)})
 	if err != nil {
@@ -371,13 +407,13 @@ func TestStop_Graceful(t *testing.T) {
 }
 
 func TestStop_ForceKill(t *testing.T) {
-	b := &testBackend{
+	b := withResumer(testBackend{
 		spawnFn: func(_ agentrun.Session) (string, []string) {
 			// Trap SIGTERM and ignore it — forces SIGKILL path.
 			return binBash, []string{"-c", `trap "" TERM; sleep 60`}
 		},
 		parseFn: textParser,
-	}
+	})
 	eng := cli.NewEngine(b, cli.WithGracePeriod(200*time.Millisecond))
 	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t)})
 	if err != nil {
@@ -400,7 +436,7 @@ func TestStop_ForceKill(t *testing.T) {
 }
 
 func TestStop_Idempotent(t *testing.T) {
-	eng := cli.NewEngine(echoBackend())
+	eng := cli.NewEngine(echoResumerBackend())
 	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t), Prompt: "x"})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -413,7 +449,7 @@ func TestStop_Idempotent(t *testing.T) {
 }
 
 func TestStop_AfterNaturalExit(t *testing.T) {
-	eng := cli.NewEngine(echoBackend())
+	eng := cli.NewEngine(echoResumerBackend())
 	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t), Prompt: "x"})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -427,12 +463,12 @@ func TestStop_AfterNaturalExit(t *testing.T) {
 }
 
 func TestStop_ContextDeadline(t *testing.T) {
-	b := &testBackend{
+	b := withResumer(testBackend{
 		spawnFn: func(_ agentrun.Session) (string, []string) {
 			return binBash, []string{"-c", `trap "" TERM; sleep 60`}
 		},
 		parseFn: textParser,
-	}
+	})
 	eng := cli.NewEngine(b, cli.WithGracePeriod(30*time.Second))
 	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t)})
 	if err != nil {
@@ -459,7 +495,7 @@ func TestStop_ContextDeadline(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestWait_CleanExit(t *testing.T) {
-	eng := cli.NewEngine(echoBackend())
+	eng := cli.NewEngine(echoResumerBackend())
 	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t), Prompt: "x"})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -471,12 +507,12 @@ func TestWait_CleanExit(t *testing.T) {
 }
 
 func TestWait_ErrorExit(t *testing.T) {
-	b := &testBackend{
+	b := withResumer(testBackend{
 		spawnFn: func(_ agentrun.Session) (string, []string) {
 			return binBash, []string{"-c", "exit 42"}
 		},
 		parseFn: textParser,
-	}
+	})
 	eng := cli.NewEngine(b)
 	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t)})
 	if err != nil {
@@ -490,7 +526,7 @@ func TestWait_ErrorExit(t *testing.T) {
 
 func TestWait_OutputNotDrained(t *testing.T) {
 	// Verify no deadlock when output channel is not drained.
-	eng := cli.NewEngine(echoBackend())
+	eng := cli.NewEngine(echoResumerBackend())
 	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t), Prompt: "x"})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -508,12 +544,12 @@ func TestWait_OutputNotDrained(t *testing.T) {
 }
 
 func TestErr_BeforeClose(t *testing.T) {
-	b := &testBackend{
+	b := withResumer(testBackend{
 		spawnFn: func(_ agentrun.Session) (string, []string) {
 			return binSleep, []string{"60"}
 		},
 		parseFn: textParser,
-	}
+	})
 	eng := cli.NewEngine(b)
 	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t)})
 	if err != nil {
@@ -531,12 +567,12 @@ func TestErr_BeforeClose(t *testing.T) {
 }
 
 func TestErr_AfterStop(t *testing.T) {
-	b := &testBackend{
+	b := withResumer(testBackend{
 		spawnFn: func(_ agentrun.Session) (string, []string) {
 			return binSleep, []string{"60"}
 		},
 		parseFn: textParser,
-	}
+	})
 	eng := cli.NewEngine(b)
 	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t)})
 	if err != nil {
@@ -634,27 +670,24 @@ func TestSend_Resume(t *testing.T) {
 	}
 }
 
-func TestSend_NoCapability(t *testing.T) {
+func TestStart_NoSendCapability(t *testing.T) {
 	eng := cli.NewEngine(echoBackend())
-	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t), Prompt: "x"})
-	if err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	drain(p)
-
-	err = p.Send(testCtx(t), "hello")
+	_, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t), Prompt: "x"})
 	if err == nil {
-		t.Fatal("expected error for no capability")
+		t.Fatal("expected error for no send capability")
+	}
+	if !errors.Is(err, agentrun.ErrSendNotSupported) {
+		t.Fatalf("expected ErrSendNotSupported, got %v", err)
 	}
 }
 
 func TestSend_AfterStop(t *testing.T) {
-	b := &testBackend{
+	b := withResumer(testBackend{
 		spawnFn: func(_ agentrun.Session) (string, []string) {
 			return binSleep, []string{"60"}
 		},
 		parseFn: textParser,
-	}
+	})
 	eng := cli.NewEngine(b)
 	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t)})
 	if err != nil {
@@ -750,7 +783,7 @@ func TestSend_Resume_ContextCanceled(t *testing.T) {
 	_ = p.Stop(stopCtx)
 }
 
-func TestSend_StreamerWithoutFormatter(t *testing.T) {
+func TestStart_StreamerWithoutFormatter(t *testing.T) {
 	b := &testStreamerOnlyBackend{
 		testBackend: testBackend{
 			spawnFn: func(_ agentrun.Session) (string, []string) {
@@ -763,23 +796,78 @@ func TestSend_StreamerWithoutFormatter(t *testing.T) {
 		},
 	}
 	eng := cli.NewEngine(b)
+	_, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t)})
+	if err == nil {
+		t.Fatal("expected error when Streamer lacks InputFormatter")
+	}
+	if !errors.Is(err, agentrun.ErrSendNotSupported) {
+		t.Fatalf("expected ErrSendNotSupported, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "InputFormatter") {
+		t.Fatalf("expected InputFormatter mention, got %v", err)
+	}
+}
+
+func TestStart_ResumerOnlyHasSendCapability(t *testing.T) {
+	eng := cli.NewEngine(echoResumerBackend())
+	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t), Prompt: "x"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	drain(p)
+	_ = p.Wait()
+}
+
+func TestStart_StreamerWithFormatterHasSendCapability(t *testing.T) {
+	b := &testStreamerBackend{
+		testBackend: testBackend{
+			spawnFn: func(_ agentrun.Session) (string, []string) { return binCat, nil },
+			parseFn: textParser,
+		},
+		streamFn: func(_ agentrun.Session) (string, []string) { return binCat, nil },
+		formatFn: func(msg string) ([]byte, error) { return []byte(msg + "\n"), nil },
+	}
+	eng := cli.NewEngine(b)
 	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t)})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-
-	// Backend is Streamer (stdin pipe open) but has no InputFormatter.
-	err = p.Send(testCtx(t), "hello")
-	if err == nil {
-		t.Fatal("expected error when Streamer lacks InputFormatter")
-	}
-	if !strings.Contains(err.Error(), "InputFormatter") {
-		t.Fatalf("expected InputFormatter error, got %v", err)
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	_ = p.Stop(ctx)
+}
+
+func TestStart_StreamerResumerWithoutFormatter_FallsBackToSpawn(t *testing.T) {
+	streamCalled := false
+	b := &testStreamerResumerBackend{
+		testBackend: testBackend{
+			spawnFn: func(s agentrun.Session) (string, []string) {
+				return binEcho, []string{s.Prompt}
+			},
+			parseFn: textParser,
+		},
+		streamFn: func(_ agentrun.Session) (string, []string) {
+			streamCalled = true
+			return binCat, nil
+		},
+		resumeFn: func(s agentrun.Session, _ string) (string, []string, error) {
+			bin, args := s.Prompt, []string{}
+			return bin, args, nil
+		},
+	}
+	eng := cli.NewEngine(b)
+	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t), Prompt: "hello"})
+	if err != nil {
+		t.Fatalf("Start should succeed (Resumer available): %v", err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = p.Stop(ctx)
+	}()
+	if streamCalled {
+		t.Error("StreamArgs should not be called when InputFormatter is missing")
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -787,7 +875,7 @@ func TestSend_StreamerWithoutFormatter(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestReadLoop_SkipLine(t *testing.T) {
-	b := &testBackend{
+	b := withResumer(testBackend{
 		spawnFn: func(_ agentrun.Session) (string, []string) {
 			return "printf", []string{"keep\nskip\nkeep2\n"}
 		},
@@ -797,7 +885,7 @@ func TestReadLoop_SkipLine(t *testing.T) {
 			}
 			return agentrun.Message{Type: agentrun.MessageText, Content: line}, nil
 		},
-	}
+	})
 	eng := cli.NewEngine(b)
 	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t)})
 	if err != nil {
@@ -814,14 +902,14 @@ func TestReadLoop_SkipLine(t *testing.T) {
 }
 
 func TestReadLoop_ParseError(t *testing.T) {
-	b := &testBackend{
+	b := withResumer(testBackend{
 		spawnFn: func(_ agentrun.Session) (string, []string) {
 			return binEcho, []string{"bad"}
 		},
 		parseFn: func(_ string) (agentrun.Message, error) {
 			return agentrun.Message{}, errors.New("parse failed")
 		},
-	}
+	})
 	eng := cli.NewEngine(b)
 	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t)})
 	if err != nil {
@@ -842,7 +930,7 @@ func TestReadLoop_ParseError(t *testing.T) {
 
 func TestReadLoop_Timestamp(t *testing.T) {
 	before := time.Now()
-	eng := cli.NewEngine(echoBackend())
+	eng := cli.NewEngine(echoResumerBackend())
 	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t), Prompt: "x"})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -858,7 +946,7 @@ func TestReadLoop_Timestamp(t *testing.T) {
 }
 
 func TestReadLoop_RawLine(t *testing.T) {
-	eng := cli.NewEngine(echoBackend())
+	eng := cli.NewEngine(echoResumerBackend())
 	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t), Prompt: "hello"})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -874,14 +962,14 @@ func TestReadLoop_RawLine(t *testing.T) {
 }
 
 func TestReadLoop_PanicRecovery(t *testing.T) {
-	b := &testBackend{
+	b := withResumer(testBackend{
 		spawnFn: func(_ agentrun.Session) (string, []string) {
 			return binEcho, []string{"trigger"}
 		},
 		parseFn: func(_ string) (agentrun.Message, error) {
 			panic("parser exploded")
 		},
-	}
+	})
 	eng := cli.NewEngine(b)
 	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t)})
 	if err != nil {
@@ -899,13 +987,13 @@ func TestReadLoop_PanicRecovery(t *testing.T) {
 }
 
 func TestReadLoop_ScannerOverflow(t *testing.T) {
-	b := &testBackend{
+	b := withResumer(testBackend{
 		spawnFn: func(_ agentrun.Session) (string, []string) {
 			// Generate a line longer than 256 bytes (no trailing newline).
 			return binBash, []string{"-c", fmt.Sprintf("head -c %d /dev/zero | tr '\\0' 'A'", 512)}
 		},
 		parseFn: textParser,
-	}
+	})
 	// Set tiny scanner buffer to trigger overflow.
 	eng := cli.NewEngine(b, cli.WithScannerBuffer(256))
 	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t)})
@@ -932,13 +1020,13 @@ func TestReadLoop_ScannerOverflow(t *testing.T) {
 
 func TestStart_SessionDeepCopy(t *testing.T) {
 	var capturedOpts map[string]string
-	b := &testBackend{
+	b := withResumer(testBackend{
 		spawnFn: func(s agentrun.Session) (string, []string) {
 			capturedOpts = s.Options
 			return binEcho, []string{"x"}
 		},
 		parseFn: textParser,
-	}
+	})
 	eng := cli.NewEngine(b)
 
 	origOpts := map[string]string{"key": "original"}
@@ -964,12 +1052,12 @@ func TestStart_SessionDeepCopy(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestConcurrent_StopAndRead(t *testing.T) {
-	b := &testBackend{
+	b := withResumer(testBackend{
 		spawnFn: func(_ agentrun.Session) (string, []string) {
 			return binBash, []string{"-c", "while true; do echo line; sleep 0.01; done"}
 		},
 		parseFn: textParser,
-	}
+	})
 	eng := cli.NewEngine(b)
 	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t)})
 	if err != nil {
@@ -994,7 +1082,7 @@ func TestConcurrent_StopAndRead(t *testing.T) {
 }
 
 func TestConcurrent_EngineStart(t *testing.T) {
-	eng := cli.NewEngine(echoBackend())
+	eng := cli.NewEngine(echoResumerBackend())
 	dir := tempDir(t)
 
 	var wg sync.WaitGroup
@@ -1022,7 +1110,7 @@ func TestConcurrent_EngineStart(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestOptions_Defaults(t *testing.T) {
-	eng := cli.NewEngine(echoBackend())
+	eng := cli.NewEngine(echoResumerBackend())
 	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t), Prompt: "x"})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -1034,7 +1122,7 @@ func TestOptions_Defaults(t *testing.T) {
 }
 
 func TestOptions_Custom(t *testing.T) {
-	eng := cli.NewEngine(echoBackend(),
+	eng := cli.NewEngine(echoResumerBackend(),
 		cli.WithOutputBuffer(10),
 		cli.WithScannerBuffer(4096),
 		cli.WithGracePeriod(1*time.Second),
@@ -1059,7 +1147,7 @@ func TestStart_CWD_IsFile(t *testing.T) {
 	if err := os.WriteFile(filePath, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	eng := cli.NewEngine(echoBackend())
+	eng := cli.NewEngine(echoResumerBackend())
 	_, err := eng.Start(testCtx(t), agentrun.Session{CWD: filePath})
 	if err == nil {
 		t.Fatal("expected error when CWD is a file")

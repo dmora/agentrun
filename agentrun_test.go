@@ -90,6 +90,7 @@ func TestSentinelErrors_Identity(t *testing.T) {
 		{"ErrUnavailable", ErrUnavailable},
 		{"ErrTerminated", ErrTerminated},
 		{"ErrSessionNotFound", ErrSessionNotFound},
+		{"ErrSendNotSupported", ErrSendNotSupported},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -108,6 +109,7 @@ func TestSentinelErrors_Wrapping(t *testing.T) {
 		{"ErrUnavailable", ErrUnavailable},
 		{"ErrTerminated", ErrTerminated},
 		{"ErrSessionNotFound", ErrSessionNotFound},
+		{"ErrSendNotSupported", ErrSendNotSupported},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -198,6 +200,36 @@ func TestMessageJSON_Minimal(t *testing.T) {
 	for _, key := range []string{"content", "tool", "usage", "raw", "raw_line"} {
 		if _, ok := raw[key]; ok {
 			t.Errorf("field %q should be omitted on minimal message", key)
+		}
+	}
+}
+
+func TestModeValid(t *testing.T) {
+	valid := []Mode{ModePlan, ModeAct}
+	for _, m := range valid {
+		if !m.Valid() {
+			t.Errorf("Mode(%q).Valid() = false, want true", m)
+		}
+	}
+	invalid := []Mode{"", "invalid", "PLAN", "Act"}
+	for _, m := range invalid {
+		if m.Valid() {
+			t.Errorf("Mode(%q).Valid() = true, want false", m)
+		}
+	}
+}
+
+func TestHITLValid(t *testing.T) {
+	valid := []HITL{HITLOn, HITLOff}
+	for _, h := range valid {
+		if !h.Valid() {
+			t.Errorf("HITL(%q).Valid() = false, want true", h)
+		}
+	}
+	invalid := []HITL{"", "invalid", "ON", "Off"}
+	for _, h := range invalid {
+		if h.Valid() {
+			t.Errorf("HITL(%q).Valid() = true, want false", h)
 		}
 	}
 }

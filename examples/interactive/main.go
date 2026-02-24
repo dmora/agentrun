@@ -52,7 +52,7 @@ func run() error {
 	session := agentrun.Session{
 		CWD: cwd,
 		Options: map[string]string{
-			claude.OptionPermissionMode: string(claude.PermissionPlan),
+			agentrun.OptionMode: string(agentrun.ModePlan),
 		},
 	}
 
