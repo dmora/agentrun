@@ -1040,6 +1040,11 @@ func TestResumeAfterCleanExit_ContextCanceled(t *testing.T) {
 	}
 	drain(p)
 
+	// Wait ensures done channel is closed before Send checks it.
+	// Without this, Send may race into replaceSubprocess instead of
+	// resumeAfterCleanExit on fast machines (observed on Go 1.26 CI).
+	_ = p.Wait()
+
 	// Send with already-canceled context.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
