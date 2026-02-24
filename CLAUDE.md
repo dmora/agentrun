@@ -93,3 +93,4 @@ agentrun (interfaces)
 - **Separate examples module**: `examples/go.mod` avoids pulling example deps into library consumers
 - **Platform build constraints**: Engine implementations using OS-specific features (signals, process groups) use `//go:build !windows` on implementation files. Interface and option files remain platform-agnostic.
 - **Signal safety**: All process Signal/Kill calls use `signalProcess()` helper which handles `os.ErrProcessDone` — prevents errors on already-exited processes
+- **Cross-cutting session controls**: `Mode` (plan/act) and `HITL` (on/off) types live in root with `Valid()` methods. Root options and backend-specific options (e.g., `claude.OptionPermissionMode`) are independent control surfaces — root wins when set, backend used when absent. See `resolvePermissionFlag()` in Claude backend.
