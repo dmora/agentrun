@@ -387,6 +387,9 @@ func (p *process) failReplacement(err error) {
 // It creates fresh output/done channels and resets finishOnce so the new
 // readLoop can call finish() when the next subprocess exits.
 func (p *process) resumeAfterCleanExit(ctx context.Context, message string) error {
+	if p.stopping.Load() {
+		return agentrun.ErrTerminated
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -411,8 +414,16 @@ func (p *process) resumeAfterCleanExit(ctx context.Context, message string) erro
 	default:
 	}
 
-	// Reset channel infrastructure for the new turn.
+	// Check for concurrent Stop() before committing to the new subprocess.
+	// If Stop() has already been called, abort and clean up the spawned process.
 	p.mu.Lock()
+	if p.stopping.Load() {
+		p.mu.Unlock()
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return agentrun.ErrTerminated
+	}
+	// Reset channel infrastructure for the new turn.
 	p.output = make(chan agentrun.Message, p.opts.OutputBuffer)
 	p.done = make(chan struct{})
 	p.finishOnce = sync.Once{}

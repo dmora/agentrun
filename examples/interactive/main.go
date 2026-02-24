@@ -173,10 +173,7 @@ func drainTurn(ctx context.Context, proc agentrun.Process, spawnPerTurn bool) er
 			return fmt.Errorf("interrupted: %w", ctx.Err())
 		case msg, ok := <-proc.Output():
 			if !ok {
-				if spawnPerTurn {
-					return nil // expected: subprocess exited, turn complete
-				}
-				return channelClosed(proc)
+				return turnClosed(proc, spawnPerTurn)
 			}
 			sawDelta = handleStreamingMessage(msg, sawDelta)
 			if !spawnPerTurn && msg.Type == agentrun.MessageResult {
@@ -186,10 +183,15 @@ func drainTurn(ctx context.Context, proc agentrun.Process, spawnPerTurn bool) er
 	}
 }
 
-// channelClosed returns an appropriate error when the output channel closes.
-func channelClosed(proc agentrun.Process) error {
+// turnClosed handles output channel closure based on backend mode.
+// Spawn-per-turn: clean exit (nil err) is a normal turn boundary.
+// Streaming: channel closure is always unexpected.
+func turnClosed(proc agentrun.Process, spawnPerTurn bool) error {
 	if err := proc.Err(); err != nil {
 		return fmt.Errorf("process exited: %w", err)
+	}
+	if spawnPerTurn {
+		return nil // expected: subprocess exited, turn complete
 	}
 	return errors.New("process exited unexpectedly")
 }
