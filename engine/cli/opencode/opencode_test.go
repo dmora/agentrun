@@ -98,32 +98,31 @@ func TestSpawnArgs(t *testing.T) {
 	}
 }
 
-func TestSpawnArgs_WithResumeID(t *testing.T) {
-	b := New()
-	_, args := b.SpawnArgs(agentrun.Session{
-		Prompt:  "hi",
-		Options: map[string]string{agentrun.OptionResumeID: testSessionID},
-	})
-	assertContains(t, args, "--session")
-	assertContains(t, args, testSessionID)
-}
-
-func TestSpawnArgs_ResumeID_InvalidSkipped(t *testing.T) {
-	b := New()
-	_, args := b.SpawnArgs(agentrun.Session{
-		Prompt:  "hi",
-		Options: map[string]string{agentrun.OptionResumeID: "not-valid-format"},
-	})
-	assertNotContains(t, args, "--session")
-}
-
-func TestSpawnArgs_ResumeID_NullByteSkipped(t *testing.T) {
-	b := New()
-	_, args := b.SpawnArgs(agentrun.Session{
-		Prompt:  "hi",
-		Options: map[string]string{agentrun.OptionResumeID: "ses_abc\x00evil1234567890123"},
-	})
-	assertNotContains(t, args, "--session")
+func TestSpawnArgs_ResumeID(t *testing.T) {
+	tests := []struct {
+		name        string
+		resumeID    string
+		wantSession bool
+	}{
+		{"valid", testSessionID, true},
+		{"invalid_skipped", "not-valid-format", false},
+		{"null_byte_skipped", "ses_abc\x00evil1234567890123", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := New()
+			_, args := b.SpawnArgs(agentrun.Session{
+				Prompt:  "hi",
+				Options: map[string]string{agentrun.OptionResumeID: tt.resumeID},
+			})
+			if tt.wantSession {
+				assertContains(t, args, "--session")
+				assertContains(t, args, tt.resumeID)
+			} else {
+				assertNotContains(t, args, "--session")
+			}
+		})
+	}
 }
 
 func TestSpawnArgs_TitleOverLimit(t *testing.T) {

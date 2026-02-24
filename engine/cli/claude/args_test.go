@@ -385,51 +385,32 @@ func TestStreamArgs_WithSession(t *testing.T) {
 	}
 }
 
-func TestStreamArgs_WithResumeID(t *testing.T) {
-	b := New()
-	session := agentrun.Session{
-		Options: map[string]string{agentrun.OptionResumeID: testResumeID},
+func TestStreamArgs_ResumeID(t *testing.T) {
+	tests := []struct {
+		name       string
+		resumeID   string
+		wantResume bool
+	}{
+		{"valid", testResumeID, true},
+		{"invalid_skipped", "has spaces!", false},
+		{"null_byte_skipped", "conv-abc\x00evil", false},
+		{"empty_skipped", "", false},
 	}
-	_, args := b.StreamArgs(session)
-	joined := strings.Join(args, " ")
-	if !strings.Contains(joined, "--resume "+testResumeID) {
-		t.Errorf("StreamArgs should include --resume when OptionResumeID set: %v", args)
-	}
-}
-
-func TestStreamArgs_ResumeID_InvalidSkipped(t *testing.T) {
-	b := New()
-	session := agentrun.Session{
-		Options: map[string]string{agentrun.OptionResumeID: "has spaces!"},
-	}
-	_, args := b.StreamArgs(session)
-	joined := strings.Join(args, " ")
-	if strings.Contains(joined, "--resume") {
-		t.Errorf("StreamArgs should skip invalid resume ID: %v", args)
-	}
-}
-
-func TestStreamArgs_ResumeID_NullByteSkipped(t *testing.T) {
-	b := New()
-	session := agentrun.Session{
-		Options: map[string]string{agentrun.OptionResumeID: "conv-abc\x00evil"},
-	}
-	_, args := b.StreamArgs(session)
-	joined := strings.Join(args, " ")
-	if strings.Contains(joined, "--resume") {
-		t.Errorf("StreamArgs should skip null-byte resume ID: %v", args)
-	}
-}
-
-func TestStreamArgs_ResumeID_EmptySkipped(t *testing.T) {
-	b := New()
-	session := agentrun.Session{
-		Options: map[string]string{agentrun.OptionResumeID: ""},
-	}
-	_, args := b.StreamArgs(session)
-	joined := strings.Join(args, " ")
-	if strings.Contains(joined, "--resume") {
-		t.Errorf("StreamArgs should skip empty resume ID: %v", args)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := New()
+			_, args := b.StreamArgs(agentrun.Session{
+				Options: map[string]string{agentrun.OptionResumeID: tt.resumeID},
+			})
+			joined := strings.Join(args, " ")
+			hasResume := strings.Contains(joined, "--resume")
+			if hasResume != tt.wantResume {
+				t.Errorf("StreamArgs --resume present = %v, want %v; args: %v", hasResume, tt.wantResume, args)
+			}
+			if tt.wantResume && !strings.Contains(joined, "--resume "+tt.resumeID) {
+				t.Errorf("StreamArgs should include --resume %q, got: %v", tt.resumeID, args)
+			}
+		})
 	}
 }
 
