@@ -82,13 +82,14 @@ func (b *Backend) parseStepStart(raw map[string]any, msg *agentrun.Message) {
 	if sid != "" && validateSessionID(sid) == nil {
 		if b.sessionID.CompareAndSwap(nil, &sid) {
 			msg.Type = agentrun.MessageInit
+			msg.Content = sid
 			return
 		}
 	}
 
 	// First step_start that didn't CAS (invalid or empty sessionID) —
 	// still emit MessageInit so the engine doesn't block waiting for init.
-	// Session ID just won't be stored.
+	// Session ID just won't be stored. Content stays empty.
 	if b.sessionID.Load() == nil {
 		msg.Type = agentrun.MessageInit
 		return

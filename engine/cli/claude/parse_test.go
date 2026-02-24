@@ -66,7 +66,25 @@ func TestParseLine_SystemInit(t *testing.T) {
 	if msg.Type != agentrun.MessageInit {
 		t.Errorf("type = %q, want %q", msg.Type, agentrun.MessageInit)
 	}
+	if msg.Content != "abc" {
+		t.Errorf("Content = %q, want %q (session_id)", msg.Content, "abc")
+	}
 	assertRawPopulated(t, msg)
+}
+
+func TestParseLine_SystemInit_NoSessionID(t *testing.T) {
+	b := New()
+	line := `{"type":"system","subtype":"init","model":"claude-sonnet-4-5-20250514"}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Type != agentrun.MessageInit {
+		t.Errorf("type = %q, want %q", msg.Type, agentrun.MessageInit)
+	}
+	if msg.Content != "" {
+		t.Errorf("Content = %q, want empty (no session_id)", msg.Content)
+	}
 }
 
 func TestParseLine_SystemMessage(t *testing.T) {
@@ -95,7 +113,25 @@ func TestParseLine_StandaloneInit(t *testing.T) {
 	if msg.Type != agentrun.MessageInit {
 		t.Errorf("type = %q, want %q", msg.Type, agentrun.MessageInit)
 	}
+	if msg.Content != "xyz" {
+		t.Errorf("Content = %q, want %q (session_id)", msg.Content, "xyz")
+	}
 	assertRawPopulated(t, msg)
+}
+
+func TestParseLine_StandaloneInit_NoSessionID(t *testing.T) {
+	b := New()
+	line := `{"type":"init","model":"claude-sonnet-4-5-20250514"}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Type != agentrun.MessageInit {
+		t.Errorf("type = %q, want %q", msg.Type, agentrun.MessageInit)
+	}
+	if msg.Content != "" {
+		t.Errorf("Content = %q, want empty (no session_id)", msg.Content)
+	}
 }
 
 func TestParseLine_AssistantNestedContent(t *testing.T) {
@@ -683,6 +719,9 @@ func FuzzParseLine(f *testing.F) {
 		`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"signature_delta","signature":"ErUBCkYIAxgCIkD"}}}`,
 		`{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"Let me reason."}]}}`,
 		`{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"reasoning"},{"type":"text","text":"answer"}]}}`,
+		`{"type":"init","session_id":"conv-abc123","model":"claude"}`,
+		`{"type":"system","subtype":"init","session_id":"sess_xyz789"}`,
+		`{"type":"init"}`,
 	}
 	for _, s := range seeds {
 		f.Add(s)

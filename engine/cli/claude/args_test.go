@@ -263,12 +263,12 @@ func TestSpawnArgs_IgnoresResumeID(t *testing.T) {
 	b := New()
 	session := agentrun.Session{
 		Prompt:  testPrompt,
-		Options: map[string]string{OptionResumeID: testResumeID},
+		Options: map[string]string{agentrun.OptionResumeID: testResumeID},
 	}
 	_, args := b.SpawnArgs(session)
 	joined := strings.Join(args, " ")
 	if strings.Contains(joined, "--resume") {
-		t.Errorf("SpawnArgs must not use OptionResumeID: %v", args)
+		t.Errorf("SpawnArgs must not use agentrun.OptionResumeID: %v", args)
 	}
 }
 
@@ -385,6 +385,35 @@ func TestStreamArgs_WithSession(t *testing.T) {
 	}
 }
 
+func TestStreamArgs_ResumeID(t *testing.T) {
+	tests := []struct {
+		name       string
+		resumeID   string
+		wantResume bool
+	}{
+		{"valid", testResumeID, true},
+		{"invalid_skipped", "has spaces!", false},
+		{"null_byte_skipped", "conv-abc\x00evil", false},
+		{"empty_skipped", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := New()
+			_, args := b.StreamArgs(agentrun.Session{
+				Options: map[string]string{agentrun.OptionResumeID: tt.resumeID},
+			})
+			joined := strings.Join(args, " ")
+			hasResume := strings.Contains(joined, "--resume")
+			if hasResume != tt.wantResume {
+				t.Errorf("StreamArgs --resume present = %v, want %v; args: %v", hasResume, tt.wantResume, args)
+			}
+			if tt.wantResume && !strings.Contains(joined, "--resume "+tt.resumeID) {
+				t.Errorf("StreamArgs should include --resume %q, got: %v", tt.resumeID, args)
+			}
+		})
+	}
+}
+
 func TestStreamArgs_IncludesPartialMessages(t *testing.T) {
 	b := New()
 	_, args := b.StreamArgs(agentrun.Session{})
@@ -409,7 +438,7 @@ func TestResumeArgs(t *testing.T) {
 	b := New()
 	session := agentrun.Session{
 		Prompt:  testPrompt,
-		Options: map[string]string{OptionResumeID: testResumeID},
+		Options: map[string]string{agentrun.OptionResumeID: testResumeID},
 	}
 	binary, args, err := b.ResumeArgs(session, testPrompt)
 	if err != nil {
@@ -439,12 +468,26 @@ func TestResumeArgs_NoResumeID(t *testing.T) {
 	}
 }
 
+func TestResumeArgs_InvalidResumeIDFormat(t *testing.T) {
+	b := New()
+	session := agentrun.Session{
+		Options: map[string]string{agentrun.OptionResumeID: "has spaces!"},
+	}
+	_, _, err := b.ResumeArgs(session, testPrompt)
+	if err == nil {
+		t.Fatal("expected error for invalid resume_id format")
+	}
+	if !strings.Contains(err.Error(), "invalid resume_id format") {
+		t.Errorf("error should mention invalid format: %v", err)
+	}
+}
+
 func TestResumeArgs_InvalidPermission(t *testing.T) {
 	b := New()
 	session := agentrun.Session{
 		Options: map[string]string{
-			OptionResumeID:       testResumeID,
-			OptionPermissionMode: "invalid",
+			agentrun.OptionResumeID: testResumeID,
+			OptionPermissionMode:    "invalid",
 		},
 	}
 	_, _, err := b.ResumeArgs(session, testPrompt)
@@ -460,8 +503,8 @@ func TestResumeArgs_WithPermission(t *testing.T) {
 	b := New()
 	session := agentrun.Session{
 		Options: map[string]string{
-			OptionResumeID:       testResumeID,
-			OptionPermissionMode: string(PermissionAcceptEdits),
+			agentrun.OptionResumeID: testResumeID,
+			OptionPermissionMode:    string(PermissionAcceptEdits),
 		},
 	}
 	_, args, err := b.ResumeArgs(session, testPrompt)
@@ -478,8 +521,8 @@ func TestResumeArgs_DefaultPermissionOmitted(t *testing.T) {
 	b := New()
 	session := agentrun.Session{
 		Options: map[string]string{
-			OptionResumeID:       testResumeID,
-			OptionPermissionMode: string(PermissionDefault),
+			agentrun.OptionResumeID: testResumeID,
+			OptionPermissionMode:    string(PermissionDefault),
 		},
 	}
 	_, args, err := b.ResumeArgs(session, testPrompt)
@@ -495,7 +538,7 @@ func TestResumeArgs_DefaultPermissionOmitted(t *testing.T) {
 func TestResumeArgs_NullByteResumeID(t *testing.T) {
 	b := New()
 	session := agentrun.Session{
-		Options: map[string]string{OptionResumeID: "conv-abc\x00evil"},
+		Options: map[string]string{agentrun.OptionResumeID: "conv-abc\x00evil"},
 	}
 	_, _, err := b.ResumeArgs(session, testPrompt)
 	if err == nil {
@@ -506,7 +549,7 @@ func TestResumeArgs_NullByteResumeID(t *testing.T) {
 func TestResumeArgs_NullByteInitialPrompt(t *testing.T) {
 	b := New()
 	session := agentrun.Session{
-		Options: map[string]string{OptionResumeID: testResumeID},
+		Options: map[string]string{agentrun.OptionResumeID: testResumeID},
 	}
 	_, _, err := b.ResumeArgs(session, "prompt\x00evil")
 	if err == nil {
@@ -518,8 +561,8 @@ func TestResumeArgs_NullBytePermission(t *testing.T) {
 	b := New()
 	session := agentrun.Session{
 		Options: map[string]string{
-			OptionResumeID:       testResumeID,
-			OptionPermissionMode: "bypassAll\x00evil",
+			agentrun.OptionResumeID: testResumeID,
+			OptionPermissionMode:    "bypassAll\x00evil",
 		},
 	}
 	_, _, err := b.ResumeArgs(session, testPrompt)
@@ -532,7 +575,7 @@ func TestResumeArgs_WithModel(t *testing.T) {
 	b := New()
 	session := agentrun.Session{
 		Model:   testModel,
-		Options: map[string]string{OptionResumeID: testResumeID},
+		Options: map[string]string{agentrun.OptionResumeID: testResumeID},
 	}
 	_, args, err := b.ResumeArgs(session, testPrompt)
 	if err != nil {
@@ -548,7 +591,7 @@ func TestResumeArgs_WithSystemPrompt(t *testing.T) {
 	b := New()
 	session := agentrun.Session{
 		Options: map[string]string{
-			OptionResumeID:              testResumeID,
+			agentrun.OptionResumeID:     testResumeID,
 			agentrun.OptionSystemPrompt: testSystemPrompt,
 		},
 	}
@@ -566,7 +609,7 @@ func TestResumeArgs_WithThinkingBudget(t *testing.T) {
 	b := New()
 	session := agentrun.Session{
 		Options: map[string]string{
-			OptionResumeID:                testResumeID,
+			agentrun.OptionResumeID:       testResumeID,
 			agentrun.OptionThinkingBudget: testThinkingBudget,
 		},
 	}
@@ -590,7 +633,7 @@ func TestResumeArgs_InvalidThinkingBudget(t *testing.T) {
 	b := New()
 	session := agentrun.Session{
 		Options: map[string]string{
-			OptionResumeID:                testResumeID,
+			agentrun.OptionResumeID:       testResumeID,
 			agentrun.OptionThinkingBudget: "abc",
 		},
 	}
@@ -607,7 +650,7 @@ func TestResumeArgs_NullByteThinkingBudget(t *testing.T) {
 	b := New()
 	session := agentrun.Session{
 		Options: map[string]string{
-			OptionResumeID:                testResumeID,
+			agentrun.OptionResumeID:       testResumeID,
 			agentrun.OptionThinkingBudget: "100\x00evil",
 		},
 	}
@@ -624,7 +667,7 @@ func TestResumeArgs_ZeroThinkingBudget(t *testing.T) {
 	b := New()
 	session := agentrun.Session{
 		Options: map[string]string{
-			OptionResumeID:                testResumeID,
+			agentrun.OptionResumeID:       testResumeID,
 			agentrun.OptionThinkingBudget: "0",
 		},
 	}
@@ -641,7 +684,7 @@ func TestResumeArgs_InvalidMaxTurns(t *testing.T) {
 	b := New()
 	session := agentrun.Session{
 		Options: map[string]string{
-			OptionResumeID:          testResumeID,
+			agentrun.OptionResumeID: testResumeID,
 			agentrun.OptionMaxTurns: "abc",
 		},
 	}
@@ -658,7 +701,7 @@ func TestResumeArgs_ZeroMaxTurns(t *testing.T) {
 	b := New()
 	session := agentrun.Session{
 		Options: map[string]string{
-			OptionResumeID:          testResumeID,
+			agentrun.OptionResumeID: testResumeID,
 			agentrun.OptionMaxTurns: "0",
 		},
 	}
@@ -675,7 +718,7 @@ func TestResumeArgs_NullByteMaxTurns(t *testing.T) {
 	b := New()
 	session := agentrun.Session{
 		Options: map[string]string{
-			OptionResumeID:          testResumeID,
+			agentrun.OptionResumeID: testResumeID,
 			agentrun.OptionMaxTurns: "5\x00evil",
 		},
 	}
@@ -889,17 +932,17 @@ func TestResumeArgs_ModeAndHITL(t *testing.T) {
 	}{
 		{
 			name:     "mode plan",
-			opts:     map[string]string{OptionResumeID: testResumeID, agentrun.OptionMode: string(agentrun.ModePlan)},
+			opts:     map[string]string{agentrun.OptionResumeID: testResumeID, agentrun.OptionMode: string(agentrun.ModePlan)},
 			contains: []string{"--permission-mode", "plan"},
 		},
 		{
 			name:     "hitl off",
-			opts:     map[string]string{OptionResumeID: testResumeID, agentrun.OptionHITL: string(agentrun.HITLOff)},
+			opts:     map[string]string{agentrun.OptionResumeID: testResumeID, agentrun.OptionHITL: string(agentrun.HITLOff)},
 			contains: []string{"--permission-mode", "bypassPermissions"},
 		},
 		{
 			name:     "act plus hitl on",
-			opts:     map[string]string{OptionResumeID: testResumeID, agentrun.OptionMode: string(agentrun.ModeAct), agentrun.OptionHITL: string(agentrun.HITLOn)},
+			opts:     map[string]string{agentrun.OptionResumeID: testResumeID, agentrun.OptionMode: string(agentrun.ModeAct), agentrun.OptionHITL: string(agentrun.HITLOn)},
 			excludes: []string{"--permission-mode"},
 		},
 	}
@@ -921,9 +964,9 @@ func TestResumeArgs_PlanIgnoresInvalidPermission(t *testing.T) {
 	b := New()
 	session := agentrun.Session{
 		Options: map[string]string{
-			OptionResumeID:       testResumeID,
-			agentrun.OptionMode:  string(agentrun.ModePlan),
-			OptionPermissionMode: "invalid",
+			agentrun.OptionResumeID: testResumeID,
+			agentrun.OptionMode:     string(agentrun.ModePlan),
+			OptionPermissionMode:    "invalid",
 		},
 	}
 	_, args, err := b.ResumeArgs(session, testPrompt)
@@ -936,7 +979,7 @@ func TestResumeArgs_PlanIgnoresInvalidPermission(t *testing.T) {
 func TestResumeArgs_InvalidMode(t *testing.T) {
 	b := New()
 	session := agentrun.Session{
-		Options: map[string]string{OptionResumeID: testResumeID, agentrun.OptionMode: "invalid"},
+		Options: map[string]string{agentrun.OptionResumeID: testResumeID, agentrun.OptionMode: "invalid"},
 	}
 	_, _, err := b.ResumeArgs(session, testPrompt)
 	if err == nil {
@@ -950,7 +993,7 @@ func TestResumeArgs_InvalidMode(t *testing.T) {
 func TestResumeArgs_InvalidHITL(t *testing.T) {
 	b := New()
 	session := agentrun.Session{
-		Options: map[string]string{OptionResumeID: testResumeID, agentrun.OptionHITL: "invalid"},
+		Options: map[string]string{agentrun.OptionResumeID: testResumeID, agentrun.OptionHITL: "invalid"},
 	}
 	_, _, err := b.ResumeArgs(session, testPrompt)
 	if err == nil {

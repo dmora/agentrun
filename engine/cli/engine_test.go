@@ -1040,6 +1040,11 @@ func TestResumeAfterCleanExit_ContextCanceled(t *testing.T) {
 	}
 	drain(p)
 
+	// Wait ensures done channel is closed before Send checks it.
+	// Without this, Send may race into replaceSubprocess instead of
+	// resumeAfterCleanExit on fast machines (observed on Go 1.26 CI).
+	_ = p.Wait()
+
 	// Send with already-canceled context.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -1137,6 +1142,135 @@ func TestReadLoop_RawLine(t *testing.T) {
 	}
 	if msgs[0].RawLine != "hello" {
 		t.Fatalf("expected RawLine 'hello', got %q", msgs[0].RawLine)
+	}
+}
+
+func TestReadLoop_SessionIDPreserved(t *testing.T) {
+	b := withResumer(testBackend{
+		spawnFn: func(_ agentrun.Session) (string, []string) {
+			return binEcho, []string{"init_line"}
+		},
+		parseFn: func(_ string) (agentrun.Message, error) {
+			return agentrun.Message{
+				Type:    agentrun.MessageInit,
+				Content: "ses_test123",
+			}, nil
+		},
+	})
+	eng := cli.NewEngine(b)
+	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t)})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	msgs := drain(p)
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].Type != agentrun.MessageInit {
+		t.Fatalf("expected MessageInit, got %v", msgs[0].Type)
+	}
+	if msgs[0].Content != "ses_test123" {
+		t.Fatalf("Content = %q, want %q (session ID must survive readLoop)", msgs[0].Content, "ses_test123")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// OptionResumeID integration tests
+// ---------------------------------------------------------------------------
+
+func TestStart_OptionResumeID_StreamArgs(t *testing.T) {
+	var capturedSession agentrun.Session
+	b := &testStreamerBackend{
+		testBackend: testBackend{
+			spawnFn: func(_ agentrun.Session) (string, []string) { return binCat, nil },
+			parseFn: textParser,
+		},
+		streamFn: func(s agentrun.Session) (string, []string) {
+			capturedSession = s
+			return binCat, nil
+		},
+		formatFn: func(msg string) ([]byte, error) { return []byte(msg + "\n"), nil },
+	}
+	eng := cli.NewEngine(b)
+	p, err := eng.Start(testCtx(t), agentrun.Session{
+		CWD:     tempDir(t),
+		Options: map[string]string{agentrun.OptionResumeID: "conv-abc123"},
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = p.Stop(ctx)
+	}()
+
+	if capturedSession.Options[agentrun.OptionResumeID] != "conv-abc123" {
+		t.Fatalf("StreamArgs did not receive OptionResumeID: %v", capturedSession.Options)
+	}
+}
+
+func TestStart_OptionResumeID_SpawnArgs(t *testing.T) {
+	var capturedSession agentrun.Session
+	b := withResumer(testBackend{
+		spawnFn: func(s agentrun.Session) (string, []string) {
+			capturedSession = s
+			return binEcho, []string{"x"}
+		},
+		parseFn: textParser,
+	})
+	eng := cli.NewEngine(b)
+	p, err := eng.Start(testCtx(t), agentrun.Session{
+		CWD:     tempDir(t),
+		Options: map[string]string{agentrun.OptionResumeID: "ses_abc12345678901234567"},
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	drain(p)
+	_ = p.Wait()
+
+	if capturedSession.Options[agentrun.OptionResumeID] != "ses_abc12345678901234567" {
+		t.Fatalf("SpawnArgs did not receive OptionResumeID: %v", capturedSession.Options)
+	}
+}
+
+func TestResumeAfterCleanExit_OptionResumeID(t *testing.T) {
+	var resumeSession agentrun.Session
+	b := &testResumerBackend{
+		testBackend: testBackend{
+			spawnFn: func(s agentrun.Session) (string, []string) {
+				return binEcho, []string{s.Prompt}
+			},
+			parseFn: textParser,
+		},
+		resumeFn: func(s agentrun.Session, prompt string) (string, []string, error) {
+			resumeSession = s
+			return binEcho, []string{prompt}, nil
+		},
+	}
+	eng := cli.NewEngine(b)
+	p, err := eng.Start(testCtx(t), agentrun.Session{
+		CWD:     tempDir(t),
+		Prompt:  "turn1",
+		Options: map[string]string{agentrun.OptionResumeID: "ses_resume1234567890123456"},
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// Drain first turn — subprocess exits cleanly.
+	drain(p)
+
+	// Send triggers resumeAfterCleanExit.
+	if err := p.Send(testCtx(t), "turn2"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	drain(p)
+
+	if resumeSession.Options[agentrun.OptionResumeID] != "ses_resume1234567890123456" {
+		t.Fatalf("ResumeArgs did not receive OptionResumeID: %v", resumeSession.Options)
 	}
 }
 

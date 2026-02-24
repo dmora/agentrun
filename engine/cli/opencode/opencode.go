@@ -13,14 +13,9 @@ import (
 
 // Session option keys specific to the OpenCode backend.
 // Namespaced with "opencode." to prevent collision across backends.
-// Cross-cutting options (OptionThinkingBudget, OptionMode, OptionHITL)
-// are defined in the root agentrun package.
+// Cross-cutting options (OptionThinkingBudget, OptionMode, OptionHITL,
+// OptionResumeID) are defined in the root agentrun package.
 const (
-	// OptionSessionID sets the OpenCode --session flag for resume.
-	// Normally auto-captured from the first step_start event;
-	// set explicitly to resume a known session without waiting for init.
-	OptionSessionID = "opencode.session_id"
-
 	// OptionVariant sets the OpenCode --variant flag.
 	// Values should be Variant constants.
 	OptionVariant = "opencode.variant"
@@ -102,10 +97,15 @@ func New(opts ...Option) *Backend {
 }
 
 // SpawnArgs builds exec.Cmd arguments for a new OpenCode session.
+// When OptionResumeID is set and valid, adds --session for cold resume.
 // Invalid option values are silently skipped per the Spawner contract.
 func (b *Backend) SpawnArgs(session agentrun.Session) (string, []string) {
 	args := baseArgs()
 	args = appendCommonArgs(args, session)
+
+	if id := session.Options[agentrun.OptionResumeID]; id != "" && validateSessionID(id) == nil {
+		args = append(args, "--session", id)
+	}
 
 	if id := session.AgentID; id != "" && !jsonutil.ContainsNull(id) {
 		args = append(args, "--agent", id)
@@ -125,7 +125,7 @@ func (b *Backend) SpawnArgs(session agentrun.Session) (string, []string) {
 // ResumeArgs builds exec.Cmd arguments to resume an existing OpenCode session.
 // The session ID is resolved from:
 //  1. The atomic write-once ID captured from step_start (auto-capture)
-//  2. session.Options[OptionSessionID] (explicit fallback)
+//  2. session.Options[OptionResumeID] (explicit fallback)
 //
 // Returns an error if no session ID is available or if the message
 // contains null bytes.
@@ -136,10 +136,7 @@ func (b *Backend) SpawnArgs(session agentrun.Session) (string, []string) {
 func (b *Backend) ResumeArgs(session agentrun.Session, initialPrompt string) (string, []string, error) {
 	sid := b.resolveSessionID(session)
 	if sid == "" {
-		return "", nil, errors.New("opencode: no session ID available (not captured from step_start and not set via OptionSessionID)")
-	}
-	if jsonutil.ContainsNull(sid) {
-		return "", nil, errors.New("opencode: session ID contains null bytes")
+		return "", nil, errors.New("opencode: no session ID available (not captured from step_start and not set via OptionResumeID)")
 	}
 	if err := validateSessionID(sid); err != nil {
 		return "", nil, err
@@ -164,12 +161,12 @@ func (b *Backend) ResumeArgs(session agentrun.Session, initialPrompt string) (st
 }
 
 // resolveSessionID returns the session ID from the atomic store (auto-capture)
-// or from OptionSessionID. Stored ID takes precedence.
+// or from OptionResumeID. Stored ID takes precedence.
 func (b *Backend) resolveSessionID(session agentrun.Session) string {
 	if p := b.sessionID.Load(); p != nil {
 		return *p
 	}
-	return session.Options[OptionSessionID]
+	return session.Options[agentrun.OptionResumeID]
 }
 
 // baseArgs returns the common CLI flags for all command modes.

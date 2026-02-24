@@ -7,10 +7,14 @@
 // The engine handles this distinction automatically — the example detects
 // the backend's capabilities to manage turn-completion semantics.
 //
+// Session resume: the session ID is captured from MessageInit.Content and
+// printed at session start. Pass --resume <id> to resume a saved session.
+//
 // Run via:
 //
 //	cd examples && go run ./interactive/ --backend claude
 //	cd examples && go run ./interactive/ --backend opencode
+//	cd examples && go run ./interactive/ --backend claude --resume conv-abc123
 package main
 
 import (
@@ -36,15 +40,16 @@ const stopTimeout = 5 * time.Second
 
 func main() {
 	backendFlag := flag.String("backend", "claude", "backend to use: claude or opencode")
+	resumeFlag := flag.String("resume", "", "session ID to resume (from previous MessageInit)")
 	flag.Parse()
 
-	if err := run(*backendFlag); err != nil {
+	if err := run(*backendFlag, *resumeFlag); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(backendName string) error {
+func run(backendName, resumeID string) error {
 	backend, err := makeBackend(backendName)
 	if err != nil {
 		return err
@@ -65,6 +70,9 @@ func run(backendName string) error {
 	// Read first prompt before Start() — spawn backends need it in args.
 	scanner := bufio.NewScanner(os.Stdin)
 	fmt.Println("agentrun interactive example (type 'exit' to quit)")
+	if resumeID != "" {
+		fmt.Printf("resuming session: %s\n", resumeID)
+	}
 	fmt.Print("\nyou> ")
 	if !scanner.Scan() {
 		fmt.Println("\nbye")
@@ -76,15 +84,7 @@ func run(backendName string) error {
 		return nil
 	}
 
-	session := agentrun.Session{
-		CWD:    cwd,
-		Prompt: firstPrompt,
-		Options: map[string]string{
-			agentrun.OptionMode: string(agentrun.ModePlan),
-		},
-	}
-
-	proc, err := engine.Start(ctx, session)
+	proc, err := engine.Start(ctx, buildSession(cwd, firstPrompt, resumeID))
 	if err != nil {
 		return fmt.Errorf("start: %w", err)
 	}
@@ -115,6 +115,17 @@ func run(backendName string) error {
 	}
 
 	return repl(ctx, proc, scanner, spawnPerTurn)
+}
+
+// buildSession creates a session with optional resume support.
+func buildSession(cwd, prompt, resumeID string) agentrun.Session {
+	opts := map[string]string{
+		agentrun.OptionMode: string(agentrun.ModePlan),
+	}
+	if resumeID != "" {
+		opts[agentrun.OptionResumeID] = resumeID
+	}
+	return agentrun.Session{CWD: cwd, Prompt: prompt, Options: opts}
 }
 
 // makeBackend creates a CLI backend by name.

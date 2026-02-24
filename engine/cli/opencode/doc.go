@@ -15,7 +15,7 @@
 // Backend (one instance per session).
 //
 // Callers relying on auto-capture must wait for MessageInit before
-// calling Send, or supply OptionSessionID upfront.
+// calling Send, or supply OptionResumeID upfront.
 //
 // # Supported options
 //
@@ -24,8 +24,11 @@
 //   - Session.AgentID → --agent <id>
 //   - OptionThinkingBudget → --thinking (boolean: any non-empty value)
 //
+// Cross-cutting (root package — session resume):
+//   - OptionResumeID → --session (auto-captured or explicit cold resume)
+//     Consumers capture the session ID from MessageInit.Content.
+//
 // Backend-specific (namespaced with "opencode." prefix):
-//   - OptionSessionID → --session (auto-captured or explicit)
 //   - OptionVariant → --variant (VariantHigh, VariantMax, VariantMinimal, VariantLow)
 //   - OptionFork → --fork (fork session on resume)
 //   - OptionTitle → --title (session title, max 512 bytes)

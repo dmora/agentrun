@@ -92,6 +92,36 @@ func TestMapPermission(t *testing.T) {
 	}
 }
 
+// --- validateResumeID tests ---
+
+func TestValidateResumeID(t *testing.T) {
+	tests := []struct {
+		name    string
+		id      string
+		wantErr bool
+	}{
+		{"simple", "conv-abc123", false},
+		{"alphanumeric", "abc123", false},
+		{"underscore", "ses_abc123", false},
+		{"hyphen", "conv-abc-123", false},
+		{"max_length", strings.Repeat("a", 128), false},
+		{"too_long", strings.Repeat("a", 129), true},
+		{"empty", "", true},
+		{"spaces", "has spaces", true},
+		{"null_bytes", "abc\x00def", true},
+		{"special_chars", "abc!@#$", true},
+		{"newline", "abc\ndef", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateResumeID(tt.id)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateResumeID(%q) error = %v, wantErr %v", tt.id, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 // --- Version helper tests ---
 // These test unexported helpers that will move to production code when
 // the Validator interface is added (#68).

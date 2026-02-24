@@ -12,6 +12,8 @@ import (
 	"github.com/dmora/agentrun/engine/cli"
 )
 
+const testValidSessionID = "ses_abcdefghij1234567890"
+
 // --- step_start ---
 
 func TestParseLine_StepStart_First(t *testing.T) {
@@ -23,7 +25,10 @@ func TestParseLine_StepStart_First(t *testing.T) {
 	if msg.Type != agentrun.MessageInit {
 		t.Errorf("Type = %q, want %q", msg.Type, agentrun.MessageInit)
 	}
-	if b.SessionID() != "ses_abcdefghij1234567890" {
+	if msg.Content != testValidSessionID {
+		t.Errorf("Content = %q, want session ID", msg.Content)
+	}
+	if b.SessionID() != testValidSessionID {
 		t.Errorf("SessionID() = %q, want stored", b.SessionID())
 	}
 }
@@ -56,7 +61,11 @@ func TestParseLine_StepStart_InvalidSessionID(t *testing.T) {
 	if msg.Type != agentrun.MessageInit {
 		t.Errorf("Type = %q, want %q", msg.Type, agentrun.MessageInit)
 	}
-	// But session ID should NOT be stored.
+	// Content should be empty — invalid ID not exposed to consumers.
+	if msg.Content != "" {
+		t.Errorf("Content = %q, want empty (invalid session ID)", msg.Content)
+	}
+	// Session ID should NOT be stored.
 	if b.SessionID() != "" {
 		t.Errorf("SessionID() = %q, want empty (invalid ID should not be stored)", b.SessionID())
 	}
@@ -82,7 +91,7 @@ func TestParseLine_StepStart_InvalidThenValid(t *testing.T) {
 	// First with invalid ID — emits init but doesn't store.
 	_, _ = b.ParseLine(`{"type":"step_start","timestamp":1700000000000,"sessionID":"bad-id"}`)
 
-	// Second with valid ID — should store and emit init.
+	// Second with valid ID — should store and emit init with Content.
 	msg, err := b.ParseLine(`{"type":"step_start","timestamp":1700000000000,"sessionID":"ses_abcdefghij1234567890"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -90,7 +99,10 @@ func TestParseLine_StepStart_InvalidThenValid(t *testing.T) {
 	if msg.Type != agentrun.MessageInit {
 		t.Errorf("Type = %q, want %q", msg.Type, agentrun.MessageInit)
 	}
-	if b.SessionID() != "ses_abcdefghij1234567890" {
+	if msg.Content != testValidSessionID {
+		t.Errorf("Content = %q, want session ID", msg.Content)
+	}
+	if b.SessionID() != testValidSessionID {
 		t.Errorf("SessionID() = %q, want stored", b.SessionID())
 	}
 }
@@ -509,6 +521,8 @@ func FuzzParseLine(f *testing.F) {
 		`{}`,
 		`not json`,
 		`{"type":""}`,
+		`{"type":"step_start","timestamp":1700000000000,"sessionID":"ses_abcdefghij1234567890"}`,
+		`{"type":"step_start","timestamp":1700000000000}`,
 	}
 	for _, s := range seeds {
 		f.Add(s)

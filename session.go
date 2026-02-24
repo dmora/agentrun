@@ -37,6 +37,20 @@ const (
 	// actions with side effects. When "off", autonomous operation.
 	// Values should be HITL constants (HITLOn, HITLOff).
 	OptionHITL = "hitl"
+
+	// OptionResumeID sets the backend-assigned session identifier for resume.
+	// Consumers capture this value from MessageInit.Content after the first
+	// session, persist it, and set it here for subsequent sessions.
+	// When set, backends include their native resume flag
+	// (e.g., --resume for Claude, --session for OpenCode).
+	// Value format is backend-specific and opaque to the root package.
+	// Values are not portable across backends.
+	//
+	// An empty MessageInit.Content signals that the backend could not
+	// capture a session ID (e.g., invalid format from the agent runtime).
+	// Consumers should treat empty Content as "no ID available" and avoid
+	// persisting it for future resume.
+	OptionResumeID = "resume_id"
 )
 
 // Mode represents the operating mode for a session.

@@ -262,6 +262,27 @@ func TestSessionJSON_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestSessionOptions_ResumeID_RoundTrip(t *testing.T) {
+	s := Session{
+		ID:  "s1",
+		CWD: "/tmp",
+		Options: map[string]string{
+			OptionResumeID: "ses_abc123def456ghi789jkl",
+		},
+	}
+	data, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got Session
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Options[OptionResumeID] != "ses_abc123def456ghi789jkl" {
+		t.Errorf("Options[OptionResumeID] = %q, want %q", got.Options[OptionResumeID], "ses_abc123def456ghi789jkl")
+	}
+}
+
 func TestSessionOptions_MapAliasing(t *testing.T) {
 	original := Session{
 		ID:      "s1",

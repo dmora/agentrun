@@ -15,7 +15,11 @@ import (
 func PrintMessage(msg agentrun.Message) {
 	switch msg.Type {
 	case agentrun.MessageInit:
-		fmt.Println("[init]    (session started)")
+		if msg.Content != "" {
+			fmt.Printf("[init]    session ID: %s\n", msg.Content)
+		} else {
+			fmt.Println("[init]    (session started)")
+		}
 	case agentrun.MessageThinking:
 		fmt.Printf("[think]   %s\n", msg.Content)
 	case agentrun.MessageText:

@@ -58,8 +58,13 @@
 // [OptionPermissionMode] is used instead. The two control surfaces are
 // independent — root options and backend options are never combined.
 //
+// Session resume:
+//
+//   - [agentrun.OptionResumeID] — backend-agnostic session ID for resume.
+//     StreamArgs adds --resume when set and valid. ResumeArgs reads from
+//     the same key. Consumers capture the ID from MessageInit.Content.
+//
 // Claude-specific options:
 //
 //   - [OptionPermissionMode] — sets --permission-mode (use [PermissionMode] values)
-//   - [OptionResumeID] — Claude conversation ID for --resume (ResumeArgs only)
 package claude
