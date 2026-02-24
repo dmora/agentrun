@@ -8,6 +8,7 @@ import (
 
 	"github.com/dmora/agentrun"
 	"github.com/dmora/agentrun/engine/cli"
+	"github.com/dmora/agentrun/engine/cli/internal/jsonutil"
 )
 
 // ParseLine parses a single line of Claude's stream-json output into a Message.
@@ -22,8 +23,8 @@ func (b *Backend) ParseLine(line string) (agentrun.Message, error) {
 		return agentrun.Message{}, fmt.Errorf("claude: invalid JSON: %w", err)
 	}
 
-	typeStr, ok := raw["type"].(string)
-	if !ok || typeStr == "" {
+	typeStr := jsonutil.GetString(raw, "type")
+	if typeStr == "" {
 		return agentrun.Message{}, fmt.Errorf("claude: missing or empty type field")
 	}
 
@@ -56,13 +57,13 @@ func (b *Backend) ParseLine(line string) (agentrun.Message, error) {
 
 // parseSystemMessage handles "system" events, detecting init subtype.
 func parseSystemMessage(raw map[string]any, msg *agentrun.Message) {
-	subtype := getString(raw, "subtype")
+	subtype := jsonutil.GetString(raw, "subtype")
 	if subtype == "init" {
 		msg.Type = agentrun.MessageInit
 		return
 	}
 	msg.Type = agentrun.MessageSystem
-	msg.Content = getString(raw, "message")
+	msg.Content = jsonutil.GetString(raw, "message")
 }
 
 // parseAssistantMessage handles "assistant" events with text and optional tool_use.
@@ -139,7 +140,7 @@ func parseAssistantContent(message map[string]any, msg *agentrun.Message) {
 // extractToolCall builds a ToolCall from a content block map.
 func extractToolCall(cm map[string]any) *agentrun.ToolCall {
 	tool := &agentrun.ToolCall{
-		Name: getString(cm, "name"),
+		Name: jsonutil.GetString(cm, "name"),
 	}
 	if input, ok := cm["input"]; ok {
 		if data, err := json.Marshal(input); err == nil {
@@ -177,11 +178,11 @@ func parseResultMessage(raw map[string]any, msg *agentrun.Message) {
 // parseErrorMessage handles "error" events.
 func parseErrorMessage(raw map[string]any, msg *agentrun.Message) {
 	msg.Type = agentrun.MessageError
-	code := getString(raw, "code")
-	message := getString(raw, "message")
+	code := jsonutil.GetString(raw, "code")
+	message := jsonutil.GetString(raw, "message")
 	// Fallback: "error" field as string.
 	if message == "" {
-		message = getString(raw, "error")
+		message = jsonutil.GetString(raw, "error")
 	}
 	if code != "" {
 		msg.Content = code + ": " + message
@@ -201,14 +202,14 @@ func parseStreamEvent(raw map[string]any, msg *agentrun.Message) {
 		return
 	}
 
-	switch getString(event, "type") {
+	switch jsonutil.GetString(event, "type") {
 	case "content_block_delta":
 		parseContentBlockDelta(event, msg)
 	default:
 		// message_start, content_block_start, content_block_stop,
 		// message_stop, message_delta — all lifecycle events.
 		msg.Type = agentrun.MessageSystem
-		msg.Content = "stream_event: " + getString(event, "type")
+		msg.Content = "stream_event: " + jsonutil.GetString(event, "type")
 	}
 }
 
@@ -221,23 +222,23 @@ func parseContentBlockDelta(event map[string]any, msg *agentrun.Message) {
 		return
 	}
 
-	switch getString(delta, "type") {
+	switch jsonutil.GetString(delta, "type") {
 	case "text_delta":
 		msg.Type = agentrun.MessageTextDelta
-		msg.Content = getString(delta, "text")
+		msg.Content = jsonutil.GetString(delta, "text")
 	case "input_json_delta":
 		msg.Type = agentrun.MessageToolUseDelta
-		msg.Content = getString(delta, "partial_json")
+		msg.Content = jsonutil.GetString(delta, "partial_json")
 	case "thinking_delta":
 		msg.Type = agentrun.MessageThinkingDelta
-		msg.Content = getString(delta, "thinking")
+		msg.Content = jsonutil.GetString(delta, "thinking")
 	case "signature_delta":
 		// Integrity verification — opaque data, not consumer-visible content.
 		msg.Type = agentrun.MessageSystem
-		msg.Content = getString(delta, "signature")
+		msg.Content = jsonutil.GetString(delta, "signature")
 	default:
 		msg.Type = agentrun.MessageSystem
-		msg.Content = "content_block_delta: unknown delta type: " + getString(delta, "type")
+		msg.Content = "content_block_delta: unknown delta type: " + jsonutil.GetString(delta, "type")
 	}
 }
 
@@ -248,8 +249,8 @@ func extractTokenUsage(source map[string]any) *agentrun.Usage {
 	if !ok {
 		return nil
 	}
-	inputTokens := getInt(usage, "input_tokens")
-	outputTokens := getInt(usage, "output_tokens")
+	inputTokens := jsonutil.GetInt(usage, "input_tokens")
+	outputTokens := jsonutil.GetInt(usage, "output_tokens")
 	if inputTokens == 0 && outputTokens == 0 {
 		return nil
 	}
@@ -273,22 +274,4 @@ func sanitizeUnknownType(typeStr string) agentrun.MessageType {
 		}
 	}
 	return agentrun.MessageType(typeStr)
-}
-
-// --- Safe JSON extraction helpers ---
-
-// getString safely extracts a string field from a map.
-func getString(m map[string]any, key string) string {
-	v, _ := m[key].(string)
-	return v
-}
-
-// getInt safely extracts a numeric field as int from a map.
-// JSON numbers are decoded as float64 by encoding/json.
-func getInt(m map[string]any, key string) int {
-	v, ok := m[key].(float64)
-	if !ok {
-		return 0
-	}
-	return int(v)
 }

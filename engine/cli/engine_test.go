@@ -871,6 +871,185 @@ func TestStart_StreamerResumerWithoutFormatter_FallsBackToSpawn(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// resumeAfterCleanExit tests (spawn-per-turn pattern)
+// ---------------------------------------------------------------------------
+
+func TestResumeAfterCleanExit_HappyPath(t *testing.T) {
+	b := &testResumerBackend{
+		testBackend: testBackend{
+			spawnFn: func(s agentrun.Session) (string, []string) {
+				return binEcho, []string{s.Prompt}
+			},
+			parseFn: textParser,
+		},
+		resumeFn: func(_ agentrun.Session, prompt string) (string, []string, error) {
+			return binEcho, []string{prompt}, nil
+		},
+	}
+	eng := cli.NewEngine(b)
+	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t), Prompt: "turn1"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// First turn: drain output, subprocess exits cleanly.
+	msgs := drain(p)
+	if len(msgs) != 1 || msgs[0].Content != "turn1" {
+		t.Fatalf("turn1: expected [turn1], got %v", msgs)
+	}
+
+	// Second turn: Send triggers resumeAfterCleanExit (done closed, termErr nil).
+	if err := p.Send(testCtx(t), "turn2"); err != nil {
+		t.Fatalf("Send turn2: %v", err)
+	}
+	msgs = drain(p)
+	if len(msgs) != 1 || msgs[0].Content != "turn2" {
+		t.Fatalf("turn2: expected [turn2], got %v", msgs)
+	}
+
+	// Third turn: another round to verify stability across multiple resumes.
+	if err := p.Send(testCtx(t), "turn3"); err != nil {
+		t.Fatalf("Send turn3: %v", err)
+	}
+	msgs = drain(p)
+	if len(msgs) != 1 || msgs[0].Content != "turn3" {
+		t.Fatalf("turn3: expected [turn3], got %v", msgs)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = p.Stop(ctx)
+}
+
+func TestResumeAfterCleanExit_OutputChannelSwap(t *testing.T) {
+	b := &testResumerBackend{
+		testBackend: testBackend{
+			spawnFn: func(s agentrun.Session) (string, []string) {
+				return binEcho, []string{s.Prompt}
+			},
+			parseFn: textParser,
+		},
+		resumeFn: func(_ agentrun.Session, prompt string) (string, []string, error) {
+			return binEcho, []string{prompt}, nil
+		},
+	}
+	eng := cli.NewEngine(b)
+	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t), Prompt: "x"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	ch1 := p.Output()
+	drain(p)
+
+	// Resume with a new turn.
+	if err := p.Send(testCtx(t), "y"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	ch2 := p.Output()
+
+	// Old channel should be closed.
+	if _, ok := <-ch1; ok {
+		t.Error("old output channel should be closed after resume")
+	}
+
+	// New channel should have the new subprocess output.
+	msg := <-ch2
+	if msg.Content != "y" {
+		t.Fatalf("expected 'y' from new channel, got %q", msg.Content)
+	}
+	drain(p)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = p.Stop(ctx)
+}
+
+func TestResumeAfterCleanExit_ResumeArgsError(t *testing.T) {
+	b := &testResumerBackend{
+		testBackend: testBackend{
+			spawnFn: func(s agentrun.Session) (string, []string) {
+				return binEcho, []string{s.Prompt}
+			},
+			parseFn: textParser,
+		},
+		resumeFn: func(_ agentrun.Session, _ string) (string, []string, error) {
+			return "", nil, errors.New("no session ID")
+		},
+	}
+	eng := cli.NewEngine(b)
+	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t), Prompt: "x"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	drain(p)
+
+	err = p.Send(testCtx(t), "y")
+	if err == nil {
+		t.Fatal("expected error from ResumeArgs")
+	}
+	if !strings.Contains(err.Error(), "no session ID") {
+		t.Fatalf("expected 'no session ID' in error, got %v", err)
+	}
+}
+
+func TestResumeAfterCleanExit_BinaryNotFound(t *testing.T) {
+	b := &testResumerBackend{
+		testBackend: testBackend{
+			spawnFn: func(s agentrun.Session) (string, []string) {
+				return binEcho, []string{s.Prompt}
+			},
+			parseFn: textParser,
+		},
+		resumeFn: func(_ agentrun.Session, _ string) (string, []string, error) {
+			return "nonexistent-binary-xyz-999", nil, nil
+		},
+	}
+	eng := cli.NewEngine(b)
+	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t), Prompt: "x"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	drain(p)
+
+	err = p.Send(testCtx(t), "y")
+	if err == nil {
+		t.Fatal("expected error for nonexistent binary")
+	}
+	if !errors.Is(err, agentrun.ErrUnavailable) {
+		t.Fatalf("expected ErrUnavailable, got %v", err)
+	}
+}
+
+func TestResumeAfterCleanExit_ContextCanceled(t *testing.T) {
+	b := &testResumerBackend{
+		testBackend: testBackend{
+			spawnFn: func(s agentrun.Session) (string, []string) {
+				return binEcho, []string{s.Prompt}
+			},
+			parseFn: textParser,
+		},
+		resumeFn: func(_ agentrun.Session, prompt string) (string, []string, error) {
+			return binEcho, []string{prompt}, nil
+		},
+	}
+	eng := cli.NewEngine(b)
+	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t), Prompt: "x"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	drain(p)
+
+	// Send with already-canceled context.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err = p.Send(ctx, "y")
+	if err == nil {
+		t.Fatal("expected error from canceled context")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // ReadLoop behavior tests
 // ---------------------------------------------------------------------------
 

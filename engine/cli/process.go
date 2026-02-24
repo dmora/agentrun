@@ -105,20 +105,38 @@ func newProcess(
 }
 
 // Output returns the channel for receiving messages from the subprocess.
+// The underlying channel may change between turns for spawn-per-turn backends
+// (Resumer without Streamer). Callers should call Output() at the start of
+// each turn rather than caching the channel reference across turns.
 func (p *process) Output() <-chan agentrun.Message {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	return p.output
 }
 
 // Send transmits a user message to the subprocess.
 func (p *process) Send(ctx context.Context, message string) error {
-	// Reject sends on stopped/done process.
-	select {
-	case <-p.done:
-		return agentrun.ErrTerminated
-	default:
-	}
 	if p.stopping.Load() {
 		return agentrun.ErrTerminated
+	}
+
+	// Check if the session has ended.
+	select {
+	case <-p.done:
+		// For Resumer backends, a clean subprocess exit (termErr == nil) is
+		// the normal end of a turn, not the end of the session. Restart by
+		// spawning a new subprocess with ResumeArgs.
+		//
+		// termErr must be read under mu because resumeAfterCleanExit resets
+		// it under the same lock — concurrent Send() calls would race otherwise.
+		p.mu.Lock()
+		cleanExit := p.caps.resumer != nil && p.termErr == nil
+		p.mu.Unlock()
+		if cleanExit {
+			return p.resumeAfterCleanExit(ctx, message)
+		}
+		return agentrun.ErrTerminated
+	default:
 	}
 
 	// Path 1: stdin pipe (Streamer mode).
@@ -126,7 +144,7 @@ func (p *process) Send(ctx context.Context, message string) error {
 		return p.sendStdin(message)
 	}
 
-	// Path 2: Resumer (subprocess replacement).
+	// Path 2: Resumer (subprocess replacement while running).
 	if p.caps.resumer != nil {
 		return p.replaceSubprocess(ctx, message)
 	}
@@ -362,6 +380,49 @@ func (p *process) failReplacement(err error) {
 	}
 }
 
+// resumeAfterCleanExit restarts a session after the subprocess exited cleanly
+// between turns. This is the normal flow for spawn-per-turn backends (Resumer
+// without Streamer) like OpenCode, where each turn is a separate subprocess.
+//
+// It creates fresh output/done channels and resets finishOnce so the new
+// readLoop can call finish() when the next subprocess exits.
+func (p *process) resumeAfterCleanExit(ctx context.Context, message string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	binary, args, err := p.caps.resumer.ResumeArgs(p.session, message)
+	if err != nil {
+		return fmt.Errorf("cli: resume args: %w", err)
+	}
+	resolvedBinary, err := exec.LookPath(binary)
+	if err != nil {
+		return fmt.Errorf("%w: %s: %w", agentrun.ErrUnavailable, binary, err)
+	}
+
+	cmd, stdin, stdout, err := spawnCmd(resolvedBinary, args, p.session.CWD, p.caps.streamer != nil)
+	if err != nil {
+		return fmt.Errorf("cli: resume: %w", err)
+	}
+
+	// Drain stale cmdDone signal from the previous subprocess.
+	select {
+	case <-p.cmdDone:
+	default:
+	}
+
+	// Reset channel infrastructure for the new turn.
+	p.mu.Lock()
+	p.output = make(chan agentrun.Message, p.opts.OutputBuffer)
+	p.done = make(chan struct{})
+	p.finishOnce = sync.Once{}
+	p.termErr = nil
+	p.mu.Unlock()
+
+	p.installSubprocess(cmd, stdin, stdout)
+	return nil
+}
+
 // spawnReplacement starts a new subprocess and readLoop after a Resumer swap.
 func (p *process) spawnReplacement(binary string, args []string) error {
 	cmd, stdin, stdout, err := spawnCmd(binary, args, p.session.CWD, p.caps.streamer != nil)
@@ -370,6 +431,13 @@ func (p *process) spawnReplacement(binary string, args []string) error {
 		return err
 	}
 
+	p.installSubprocess(cmd, stdin, stdout)
+	return nil
+}
+
+// installSubprocess wires a spawned command into the process and starts its
+// readLoop. Must be called while no readLoop is active for this process.
+func (p *process) installSubprocess(cmd *exec.Cmd, stdin io.WriteCloser, stdout io.ReadCloser) {
 	readCtx, cancelRead := context.WithCancel(context.Background())
 
 	p.mu.Lock()
@@ -380,5 +448,4 @@ func (p *process) spawnReplacement(binary string, args []string) error {
 	p.mu.Unlock()
 
 	go p.readLoop(readCtx, stdout)
-	return nil
 }
