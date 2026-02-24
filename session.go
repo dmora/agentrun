@@ -25,7 +25,51 @@ const (
 	//
 	// When empty or absent, thinking output is disabled (backend default).
 	OptionThinkingBudget = "thinking_budget"
+
+	// OptionMode sets the operating mode for the session.
+	// Backends that support modes map this to their native mechanism.
+	// Backends that don't recognize this option silently ignore it.
+	// Values should be Mode constants (ModePlan, ModeAct).
+	OptionMode = "mode"
+
+	// OptionHITL controls human-in-the-loop supervision.
+	// When "on" (or absent), the backend requires human approval for
+	// actions with side effects. When "off", autonomous operation.
+	// Values should be HITL constants (HITLOn, HITLOff).
+	OptionHITL = "hitl"
 )
+
+// Mode represents the operating mode for a session.
+type Mode string
+
+const (
+	// ModePlan requests analysis-only behavior.
+	ModePlan Mode = "plan"
+
+	// ModeAct authorizes the agent to take actions.
+	ModeAct Mode = "act"
+)
+
+// Valid reports whether m is a recognized Mode value.
+func (m Mode) Valid() bool {
+	return m == ModePlan || m == ModeAct
+}
+
+// HITL represents the human-in-the-loop setting for a session.
+type HITL string
+
+const (
+	// HITLOn requires human approval for actions with side effects.
+	HITLOn HITL = "on"
+
+	// HITLOff enables autonomous operation without human prompts.
+	HITLOff HITL = "off"
+)
+
+// Valid reports whether h is a recognized HITL value.
+func (h HITL) Valid() bool {
+	return h == HITLOn || h == HITLOff
+}
 
 // Session is the minimal session state passed to engines.
 //

@@ -761,6 +761,361 @@ func TestFormatInput_Empty(t *testing.T) {
 	}
 }
 
+// --- Mode and HITL tests (SpawnArgs) ---
+
+func TestSpawnArgs_ModeAndHITL(t *testing.T) {
+	tests := []struct {
+		name     string
+		opts     map[string]string
+		contains []string
+		excludes []string
+	}{
+		{
+			name:     "mode plan",
+			opts:     map[string]string{agentrun.OptionMode: string(agentrun.ModePlan)},
+			contains: []string{"--permission-mode", "plan"},
+		},
+		{
+			name:     "mode act",
+			opts:     map[string]string{agentrun.OptionMode: string(agentrun.ModeAct)},
+			excludes: []string{"--permission-mode"},
+		},
+		{
+			name:     "hitl off",
+			opts:     map[string]string{agentrun.OptionHITL: string(agentrun.HITLOff)},
+			contains: []string{"--permission-mode", "bypassPermissions"},
+		},
+		{
+			name:     "plan overrides backend permission",
+			opts:     map[string]string{agentrun.OptionMode: string(agentrun.ModePlan), OptionPermissionMode: string(PermissionBypassAll)},
+			contains: []string{"--permission-mode", "plan"},
+		},
+		{
+			name:     "hitl off overrides backend permission",
+			opts:     map[string]string{agentrun.OptionHITL: string(agentrun.HITLOff), OptionPermissionMode: string(PermissionDefault)},
+			contains: []string{"--permission-mode", "bypassPermissions"},
+		},
+		{
+			name:     "act plus hitl on no bypass",
+			opts:     map[string]string{agentrun.OptionMode: string(agentrun.ModeAct), agentrun.OptionHITL: string(agentrun.HITLOn), OptionPermissionMode: string(PermissionBypassAll)},
+			excludes: []string{"--permission-mode"},
+		},
+		{
+			name:     "no root uses backend acceptEdits",
+			opts:     map[string]string{OptionPermissionMode: string(PermissionAcceptEdits)},
+			contains: []string{"--permission-mode", "acceptEdits"},
+		},
+		{
+			name:     "plan plus hitl off plan wins",
+			opts:     map[string]string{agentrun.OptionMode: string(agentrun.ModePlan), agentrun.OptionHITL: string(agentrun.HITLOff)},
+			contains: []string{"--permission-mode", "plan"},
+		},
+		{
+			name:     "hitl on alone no flag",
+			opts:     map[string]string{agentrun.OptionHITL: string(agentrun.HITLOn)},
+			excludes: []string{"--permission-mode"},
+		},
+		{
+			name:     "act alone suppresses backend permission",
+			opts:     map[string]string{agentrun.OptionMode: string(agentrun.ModeAct), OptionPermissionMode: string(PermissionAcceptEdits)},
+			excludes: []string{"--permission-mode"},
+		},
+		{
+			name:     "invalid mode silently skipped",
+			opts:     map[string]string{agentrun.OptionMode: "invalid"},
+			excludes: []string{"--permission-mode"},
+		},
+		{
+			name:     "invalid hitl silently skipped",
+			opts:     map[string]string{agentrun.OptionHITL: "invalid"},
+			excludes: []string{"--permission-mode"},
+		},
+	}
+
+	b := New()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			session := agentrun.Session{Prompt: testPrompt, Options: tt.opts}
+			_, args := b.SpawnArgs(session)
+			assertArgs(t, args, tt.contains, tt.excludes, testPrompt, false)
+		})
+	}
+}
+
+// --- Mode and HITL tests (StreamArgs) ---
+
+func TestStreamArgs_ModeAndHITL(t *testing.T) {
+	tests := []struct {
+		name     string
+		opts     map[string]string
+		contains []string
+		excludes []string
+	}{
+		{
+			name:     "mode plan",
+			opts:     map[string]string{agentrun.OptionMode: string(agentrun.ModePlan)},
+			contains: []string{"--permission-mode", "plan"},
+		},
+		{
+			name:     "hitl off",
+			opts:     map[string]string{agentrun.OptionHITL: string(agentrun.HITLOff)},
+			contains: []string{"--permission-mode", "bypassPermissions"},
+		},
+		{
+			name:     "act plus hitl on",
+			opts:     map[string]string{agentrun.OptionMode: string(agentrun.ModeAct), agentrun.OptionHITL: string(agentrun.HITLOn)},
+			excludes: []string{"--permission-mode"},
+		},
+	}
+
+	b := New()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			session := agentrun.Session{Options: tt.opts}
+			_, args := b.StreamArgs(session)
+			assertArgs(t, args, tt.contains, tt.excludes, "", false)
+		})
+	}
+}
+
+// --- Mode and HITL tests (ResumeArgs) ---
+
+func TestResumeArgs_ModeAndHITL(t *testing.T) {
+	tests := []struct {
+		name     string
+		opts     map[string]string
+		contains []string
+		excludes []string
+	}{
+		{
+			name:     "mode plan",
+			opts:     map[string]string{OptionResumeID: testResumeID, agentrun.OptionMode: string(agentrun.ModePlan)},
+			contains: []string{"--permission-mode", "plan"},
+		},
+		{
+			name:     "hitl off",
+			opts:     map[string]string{OptionResumeID: testResumeID, agentrun.OptionHITL: string(agentrun.HITLOff)},
+			contains: []string{"--permission-mode", "bypassPermissions"},
+		},
+		{
+			name:     "act plus hitl on",
+			opts:     map[string]string{OptionResumeID: testResumeID, agentrun.OptionMode: string(agentrun.ModeAct), agentrun.OptionHITL: string(agentrun.HITLOn)},
+			excludes: []string{"--permission-mode"},
+		},
+	}
+
+	b := New()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			session := agentrun.Session{Options: tt.opts}
+			_, args, err := b.ResumeArgs(session, testPrompt)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			assertArgs(t, args, tt.contains, tt.excludes, testPrompt, false)
+		})
+	}
+}
+
+func TestResumeArgs_PlanIgnoresInvalidPermission(t *testing.T) {
+	b := New()
+	session := agentrun.Session{
+		Options: map[string]string{
+			OptionResumeID:       testResumeID,
+			agentrun.OptionMode:  string(agentrun.ModePlan),
+			OptionPermissionMode: "invalid",
+		},
+	}
+	_, args, err := b.ResumeArgs(session, testPrompt)
+	if err != nil {
+		t.Fatalf("root options set — invalid backend permission should be ignored: %v", err)
+	}
+	assertArgs(t, args, []string{"--permission-mode", "plan"}, nil, testPrompt, false)
+}
+
+func TestResumeArgs_InvalidMode(t *testing.T) {
+	b := New()
+	session := agentrun.Session{
+		Options: map[string]string{OptionResumeID: testResumeID, agentrun.OptionMode: "invalid"},
+	}
+	_, _, err := b.ResumeArgs(session, testPrompt)
+	if err == nil {
+		t.Fatal("expected error for invalid mode")
+	}
+	if !strings.Contains(err.Error(), "unknown mode") {
+		t.Errorf("error should mention unknown mode: %v", err)
+	}
+}
+
+func TestResumeArgs_InvalidHITL(t *testing.T) {
+	b := New()
+	session := agentrun.Session{
+		Options: map[string]string{OptionResumeID: testResumeID, agentrun.OptionHITL: "invalid"},
+	}
+	_, _, err := b.ResumeArgs(session, testPrompt)
+	if err == nil {
+		t.Fatal("expected error for invalid hitl")
+	}
+	if !strings.Contains(err.Error(), "unknown hitl") {
+		t.Errorf("error should mention unknown hitl: %v", err)
+	}
+}
+
+// --- resolvePermissionFlag contract tests ---
+
+func TestResolvePermissionFlag_RootOptions(t *testing.T) {
+	tests := []struct {
+		name   string
+		opts   map[string]string
+		want   string
+		wantOK bool
+	}{
+		{
+			name:   "plan",
+			opts:   map[string]string{agentrun.OptionMode: "plan"},
+			want:   "plan",
+			wantOK: true,
+		},
+		{
+			name:   "act",
+			opts:   map[string]string{agentrun.OptionMode: "act"},
+			want:   "",
+			wantOK: false,
+		},
+		{
+			name:   "hitl off",
+			opts:   map[string]string{agentrun.OptionHITL: "off"},
+			want:   "bypassPermissions",
+			wantOK: true,
+		},
+		{
+			name:   "hitl on",
+			opts:   map[string]string{agentrun.OptionHITL: "on"},
+			want:   "",
+			wantOK: false,
+		},
+		{
+			name:   "plan plus hitl off — plan wins",
+			opts:   map[string]string{agentrun.OptionMode: "plan", agentrun.OptionHITL: "off"},
+			want:   "plan",
+			wantOK: true,
+		},
+		{
+			name:   "act plus hitl on — default",
+			opts:   map[string]string{agentrun.OptionMode: "act", agentrun.OptionHITL: "on"},
+			want:   "",
+			wantOK: false,
+		},
+		{
+			name:   "act plus hitl off — bypass",
+			opts:   map[string]string{agentrun.OptionMode: "act", agentrun.OptionHITL: "off"},
+			want:   "bypassPermissions",
+			wantOK: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := resolvePermissionFlag(tt.opts)
+			if ok != tt.wantOK || got != tt.want {
+				t.Errorf("resolvePermissionFlag(%v) = (%q, %v), want (%q, %v)", tt.opts, got, ok, tt.want, tt.wantOK)
+			}
+		})
+	}
+}
+
+func TestResolvePermissionFlag_RootSuppressesBackend(t *testing.T) {
+	tests := []struct {
+		name   string
+		opts   map[string]string
+		want   string
+		wantOK bool
+	}{
+		{
+			name:   "plan ignores bypassAll",
+			opts:   map[string]string{agentrun.OptionMode: "plan", OptionPermissionMode: "bypassAll"},
+			want:   "plan",
+			wantOK: true,
+		},
+		{
+			name:   "act ignores acceptEdits",
+			opts:   map[string]string{agentrun.OptionMode: "act", OptionPermissionMode: "acceptEdits"},
+			want:   "",
+			wantOK: false,
+		},
+		{
+			name:   "hitl on ignores bypassAll",
+			opts:   map[string]string{agentrun.OptionHITL: "on", OptionPermissionMode: "bypassAll"},
+			want:   "",
+			wantOK: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := resolvePermissionFlag(tt.opts)
+			if ok != tt.wantOK || got != tt.want {
+				t.Errorf("resolvePermissionFlag(%v) = (%q, %v), want (%q, %v)", tt.opts, got, ok, tt.want, tt.wantOK)
+			}
+		})
+	}
+}
+
+func TestResolvePermissionFlag_BackendOnly(t *testing.T) {
+	tests := []struct {
+		name   string
+		opts   map[string]string
+		want   string
+		wantOK bool
+	}{
+		{
+			name:   "acceptEdits",
+			opts:   map[string]string{OptionPermissionMode: "acceptEdits"},
+			want:   "acceptEdits",
+			wantOK: true,
+		},
+		{
+			name:   "bypassAll",
+			opts:   map[string]string{OptionPermissionMode: "bypassAll"},
+			want:   "bypassPermissions",
+			wantOK: true,
+		},
+		{
+			name:   "plan",
+			opts:   map[string]string{OptionPermissionMode: "plan"},
+			want:   "plan",
+			wantOK: true,
+		},
+		{
+			name:   "default omitted",
+			opts:   map[string]string{OptionPermissionMode: "default"},
+			want:   "",
+			wantOK: false,
+		},
+		{
+			name:   "empty",
+			opts:   map[string]string{},
+			want:   "",
+			wantOK: false,
+		},
+		{
+			name:   "invalid silently skipped",
+			opts:   map[string]string{OptionPermissionMode: "bogus"},
+			want:   "",
+			wantOK: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := resolvePermissionFlag(tt.opts)
+			if ok != tt.wantOK || got != tt.want {
+				t.Errorf("resolvePermissionFlag(%v) = (%q, %v), want (%q, %v)", tt.opts, got, ok, tt.want, tt.wantOK)
+			}
+		})
+	}
+}
+
 // --- Helpers ---
 
 func assertArgs(t *testing.T, args, contains, excludes []string, last string, noNullByte bool) {

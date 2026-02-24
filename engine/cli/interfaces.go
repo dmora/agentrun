@@ -64,6 +64,10 @@ type Streamer interface {
 // Backend is the minimum interface a CLI backend must implement.
 // Optional capabilities (Resumer, Streamer, InputFormatter) are
 // discovered via type assertion at runtime.
+//
+// Backends must implement at least one send path for [Engine.Start] to
+// succeed: either Streamer+InputFormatter or Resumer. Start returns
+// [agentrun.ErrSendNotSupported] if neither is available.
 type Backend interface {
 	Spawner
 	Parser

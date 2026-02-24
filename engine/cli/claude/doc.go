@@ -43,6 +43,21 @@
 //   - [agentrun.OptionMaxTurns] — sets --max-turns
 //   - [agentrun.OptionThinkingBudget] — sets --max-thinking-tokens (thinking output)
 //
+// Cross-cutting session controls (from root package):
+//
+//   - [agentrun.OptionMode] — sets session intent ("plan" or "act")
+//   - [agentrun.OptionHITL] — controls human-in-the-loop ("on" or "off")
+//
+// When OptionMode or OptionHITL are set, they map to --permission-mode:
+//
+//   - plan (any HITL) → --permission-mode plan
+//   - act + hitl=off → --permission-mode bypassPermissions
+//   - act + hitl=on  → default behavior (no flag)
+//
+// When neither OptionMode nor OptionHITL is set, the backend-specific
+// [OptionPermissionMode] is used instead. The two control surfaces are
+// independent — root options and backend options are never combined.
+//
 // Claude-specific options:
 //
 //   - [OptionPermissionMode] — sets --permission-mode (use [PermissionMode] values)

@@ -50,6 +50,8 @@ func (e *Engine) Validate() (retErr error) {
 }
 
 // Start initializes a subprocess session and returns a Process handle.
+// Returns [agentrun.ErrSendNotSupported] if the backend lacks a send path
+// (neither Streamer+InputFormatter nor Resumer).
 // The context parameter is reserved for future use (e.g., start timeout);
 // subprocess lifetime is controlled via [agentrun.Process.Stop].
 func (e *Engine) Start(_ context.Context, session agentrun.Session, opts ...agentrun.Option) (agentrun.Process, error) {
@@ -80,6 +82,10 @@ func (e *Engine) Start(_ context.Context, session agentrun.Session, opts ...agen
 
 	// Resolve capabilities once.
 	caps := resolveCapabilities(e.backend)
+
+	if err := validateSendCapability(caps); err != nil {
+		return nil, err
+	}
 
 	// Determine mode: Streamer (stdin pipe) or one-shot (SpawnArgs).
 	var binary string
@@ -125,6 +131,20 @@ func spawnCmd(binary string, args []string, dir string, wantStdin bool) (*exec.C
 		return nil, nil, nil, err
 	}
 	return cmd, stdin, stdout, nil
+}
+
+// validateSendCapability checks that the backend can fulfill Process.Send.
+// A backend needs either Streamer+InputFormatter or Resumer to support Send.
+func validateSendCapability(caps capabilities) error {
+	hasStreamerPath := caps.streamer != nil && caps.formatter != nil
+	hasResumerPath := caps.resumer != nil
+	if !hasStreamerPath && !hasResumerPath {
+		if caps.streamer != nil {
+			return fmt.Errorf("%w: backend implements Streamer but not InputFormatter — implement InputFormatter to enable multi-turn conversation", agentrun.ErrSendNotSupported)
+		}
+		return fmt.Errorf("%w: backend implements neither Streamer+InputFormatter nor Resumer — implement at least one send path for multi-turn conversation", agentrun.ErrSendNotSupported)
+	}
+	return nil
 }
 
 // cloneSession returns a deep copy of session, cloning the Options map.

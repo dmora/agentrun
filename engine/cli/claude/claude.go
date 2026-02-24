@@ -143,19 +143,7 @@ func (b *Backend) ResumeArgs(session agentrun.Session, initialPrompt string) (st
 		return "", nil, errors.New("claude: initial prompt contains null bytes")
 	}
 
-	// Validate permission strictly (error on invalid) before appendSessionArgs
-	// which would silently skip.
-	perm := PermissionMode(session.Options[OptionPermissionMode])
-	if perm != "" && perm != PermissionDefault {
-		if _, err := mapPermission(perm); err != nil {
-			return "", nil, err
-		}
-	}
-
-	if err := validatePositiveInt(session.Options, agentrun.OptionMaxTurns, "max turns"); err != nil {
-		return "", nil, err
-	}
-	if err := validatePositiveInt(session.Options, agentrun.OptionThinkingBudget, "thinking budget"); err != nil {
+	if err := validateSessionOptions(session.Options); err != nil {
 		return "", nil, err
 	}
 
@@ -244,17 +232,99 @@ func appendSessionArgs(args []string, session agentrun.Session) []string {
 		args = append(args, "--system-prompt", sp)
 	}
 
-	perm := PermissionMode(session.Options[OptionPermissionMode])
-	if perm != "" && perm != PermissionDefault {
-		if mapped, err := mapPermission(perm); err == nil {
-			args = append(args, "--permission-mode", mapped)
-		}
+	if flag, ok := resolvePermissionFlag(session.Options); ok {
+		args = append(args, "--permission-mode", flag)
 	}
 
 	args = appendPositiveInt(args, session.Options, agentrun.OptionMaxTurns, "--max-turns")
 	args = appendPositiveInt(args, session.Options, agentrun.OptionThinkingBudget, "--max-thinking-tokens")
 
 	return args
+}
+
+// rootOptionsSet reports whether either OptionMode or OptionHITL is present
+// in opts. When true, root options take precedence over backend-specific
+// OptionPermissionMode.
+func rootOptionsSet(opts map[string]string) bool {
+	return opts[agentrun.OptionMode] != "" || opts[agentrun.OptionHITL] != ""
+}
+
+// resolvePermissionFlag maps root-level OptionMode/OptionHITL and
+// backend-specific OptionPermissionMode to a --permission-mode value.
+// Root options and backend options are independent control surfaces:
+// when root options are set, OptionPermissionMode is ignored;
+// when root options are absent, OptionPermissionMode is used.
+//
+// Invalid Mode/HITL values are treated as unrecognized and produce no flag.
+// This is intentional: SpawnArgs/StreamArgs must not fail (no error return),
+// so unknown values are silently skipped. ResumeArgs validates strictly via
+// validateSessionOptions before calling appendSessionArgs.
+func resolvePermissionFlag(opts map[string]string) (string, bool) {
+	mode := agentrun.Mode(opts[agentrun.OptionMode])
+	hitl := agentrun.HITL(opts[agentrun.OptionHITL])
+
+	// Root options set — use them exclusively.
+	if rootOptionsSet(opts) {
+		if mode == agentrun.ModePlan {
+			return "plan", true
+		}
+		if hitl == agentrun.HITLOff {
+			return "bypassPermissions", true
+		}
+		// act+on, just act, or just hitl=on → default behavior (no flag).
+		return "", false
+	}
+
+	// Root options absent — defer to backend-specific OptionPermissionMode.
+	perm := PermissionMode(opts[OptionPermissionMode])
+	if perm != "" && perm != PermissionDefault {
+		if mapped, err := mapPermission(perm); err == nil {
+			return mapped, true
+		}
+	}
+	return "", false
+}
+
+// validateSessionOptions performs strict validation of session options used
+// by ResumeArgs. Checks mode, HITL, permission mode, max turns, and thinking
+// budget. Returns the first validation error encountered.
+func validateSessionOptions(opts map[string]string) error {
+	if err := validateModeHITL(opts); err != nil {
+		return err
+	}
+	// Validate permission only when root options are absent (independent surfaces).
+	if err := validatePermissionIfNoRoot(opts); err != nil {
+		return err
+	}
+	if err := validatePositiveInt(opts, agentrun.OptionMaxTurns, "max turns"); err != nil {
+		return err
+	}
+	return validatePositiveInt(opts, agentrun.OptionThinkingBudget, "thinking budget")
+}
+
+// validateModeHITL checks OptionMode and OptionHITL for valid values.
+func validateModeHITL(opts map[string]string) error {
+	if mode := agentrun.Mode(opts[agentrun.OptionMode]); mode != "" && !mode.Valid() {
+		return fmt.Errorf("claude: unknown mode %q: valid: plan, act", mode)
+	}
+	if hitl := agentrun.HITL(opts[agentrun.OptionHITL]); hitl != "" && !hitl.Valid() {
+		return fmt.Errorf("claude: unknown hitl %q: valid: on, off", hitl)
+	}
+	return nil
+}
+
+// validatePermissionIfNoRoot validates OptionPermissionMode only when root
+// options (OptionMode/OptionHITL) are absent — they are independent surfaces.
+func validatePermissionIfNoRoot(opts map[string]string) error {
+	if rootOptionsSet(opts) {
+		return nil
+	}
+	perm := PermissionMode(opts[OptionPermissionMode])
+	if perm != "" && perm != PermissionDefault {
+		_, err := mapPermission(perm)
+		return err
+	}
+	return nil
 }
 
 // mapPermission maps a PermissionMode to its Claude CLI flag value.
