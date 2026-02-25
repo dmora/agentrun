@@ -207,6 +207,43 @@ func TestConn_Call_Timeout(t *testing.T) {
 	}
 }
 
+// TestConn_Call_ContextCancel_ResponseDrain verifies that a response arriving
+// just before context cancellation is not lost. The inner select in Call's
+// ctx.Done() path should drain the pending channel.
+func TestConn_Call_ContextCancel_ResponseDrain(t *testing.T) {
+	conn, peer := newTestConn(t)
+	go conn.ReadLoop()
+
+	type result struct {
+		Value string `json:"value"`
+	}
+
+	// Use a manually-cancelled context so we control timing precisely.
+	ctx, cancel := context.WithCancel(context.Background())
+
+	var got result
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- conn.Call(ctx, "echo", nil, &got)
+	}()
+
+	// Wait for the request, send response, then cancel immediately.
+	req := peer.readRequest(t)
+	peer.respond(t, *req.ID, result{Value: "ok"})
+	// Small delay to let ReadLoop dispatch the response to the buffered channel.
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+
+	err := <-errCh
+	// The response was sent before cancel — Call should return nil (not ctx.Err()).
+	if err != nil {
+		t.Errorf("Call = %v, want nil (response arrived before cancel)", err)
+	}
+	if got.Value != "ok" {
+		t.Errorf("result = %q, want %q", got.Value, "ok")
+	}
+}
+
 func TestConn_Notification_Dispatch(t *testing.T) {
 	conn, peer := newTestConn(t)
 

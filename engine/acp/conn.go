@@ -110,27 +110,39 @@ func (c *Conn) Call(ctx context.Context, method string, params, result any) erro
 
 	select {
 	case resp, ok := <-ch:
-		if !ok {
-			return fmt.Errorf("acp: %s: connection closed", method)
-		}
-		if resp.Error != nil {
-			return &RPCError{
-				Code:    resp.Error.Code,
-				Message: resp.Error.Message,
-			}
-		}
-		if result != nil && resp.Result != nil {
-			if err := json.Unmarshal(resp.Result, result); err != nil {
-				return fmt.Errorf("acp: unmarshal %s result: %w", method, err)
-			}
-		}
-		return nil
+		return c.handleCallResponse(resp, ok, method, result)
 	case <-ctx.Done():
 		c.mu.Lock()
 		delete(c.pending, id)
 		c.mu.Unlock()
-		return ctx.Err()
+		// Response may have arrived just before ctx cancellation —
+		// drain ch to avoid discarding a successful result.
+		select {
+		case resp, ok := <-ch:
+			return c.handleCallResponse(resp, ok, method, result)
+		default:
+			return ctx.Err()
+		}
 	}
+}
+
+// handleCallResponse processes a response received from a pending Call channel.
+func (c *Conn) handleCallResponse(resp *rpcResponse, ok bool, method string, result any) error {
+	if !ok {
+		return fmt.Errorf("acp: %s: connection closed", method)
+	}
+	if resp.Error != nil {
+		return &RPCError{
+			Code:    resp.Error.Code,
+			Message: resp.Error.Message,
+		}
+	}
+	if result != nil && resp.Result != nil {
+		if err := json.Unmarshal(resp.Result, result); err != nil {
+			return fmt.Errorf("acp: unmarshal %s result: %w", method, err)
+		}
+	}
+	return nil
 }
 
 // Notify sends a JSON-RPC notification (no id, no response expected).
