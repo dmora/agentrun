@@ -65,6 +65,13 @@ agentrun (interfaces)
 │   ├── options.go       ← EngineOptions, EngineOption, With* functions
 │   ├── claude/          ← Claude Code backend
 │   └── opencode/        ← OpenCode backend
+├── engine/acp/          ← ACP engine: JSON-RPC 2.0 persistent subprocess
+│   ├── conn.go          ← Bidirectional JSON-RPC 2.0 Conn (platform-agnostic)
+│   ├── protocol.go      ← ACP method constants + request/response types
+│   ├── update.go        ← session/update → agentrun.Message mapping
+│   ├── options.go       ← EngineOptions, PermissionHandler, With* functions
+│   ├── engine.go        ← Engine, NewEngine, Validate, Start (!windows)
+│   └── process.go       ← process impl, Send, Stop, emit (!windows)
 ├── engine/api/
 │   └── adk/             ← Google ADK API engine
 └── enginetest/          ← Compliance test suites
@@ -79,6 +86,7 @@ agentrun (interfaces)
 | `engine/cli` | CLI subprocess engine: Backend→Engine adapter, process lifecycle, signal handling |
 | `engine/cli/claude` | Claude Code backend (all 5 cli interfaces: Spawner, Parser, Resumer, Streamer, InputFormatter) |
 | `engine/cli/opencode` | OpenCode backend (stub) |
+| `engine/acp` | ACP engine: JSON-RPC 2.0 persistent subprocess, multi-turn without MCP cold boot |
 | `engine/api/adk` | Google ADK API engine |
 | `enginetest` | Shared compliance test suites (RunSpawnerTests, etc.) |
 | `examples/` | Separate module with runnable examples |
