@@ -39,18 +39,23 @@ const (
 	OptionHITL = "hitl"
 
 	// OptionResumeID sets the backend-assigned session identifier for resume.
-	// Consumers capture this value from MessageInit.Content after the first
+	// Consumers capture this value from MessageInit.ResumeID after the first
 	// session, persist it, and set it here for subsequent sessions.
 	// When set, backends include their native resume flag
 	// (e.g., --resume for Claude, --session for OpenCode).
 	// Value format is backend-specific and opaque to the root package.
 	// Values are not portable across backends.
 	//
-	// An empty MessageInit.Content signals that the backend could not
+	// An empty MessageInit.ResumeID signals that the backend could not
 	// capture a session ID (e.g., invalid format from the agent runtime).
-	// Consumers should treat empty Content as "no ID available" and avoid
+	// Consumers should treat empty ResumeID as "no ID available" and avoid
 	// persisting it for future resume.
 	OptionResumeID = "resume_id"
+
+	// OptionAgentID identifies which agent specification to use.
+	// Cross-cutting: OpenCode maps to --agent <id>, ADK uses agent registry.
+	// Backends that don't support agent selection silently ignore this.
+	OptionAgentID = "agent_id"
 )
 
 // Mode represents the operating mode for a session.
@@ -93,9 +98,6 @@ func (h HITL) Valid() bool {
 type Session struct {
 	// ID uniquely identifies the session.
 	ID string `json:"id"`
-
-	// AgentID identifies which agent specification to use.
-	AgentID string `json:"agent_id,omitempty"`
 
 	// CWD is the working directory for the agent process.
 	CWD string `json:"cwd"`

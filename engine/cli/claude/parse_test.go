@@ -66,8 +66,8 @@ func TestParseLine_SystemInit(t *testing.T) {
 	if msg.Type != agentrun.MessageInit {
 		t.Errorf("type = %q, want %q", msg.Type, agentrun.MessageInit)
 	}
-	if msg.Content != "abc" {
-		t.Errorf("Content = %q, want %q (session_id)", msg.Content, "abc")
+	if msg.ResumeID != "abc" {
+		t.Errorf("ResumeID = %q, want %q (session_id)", msg.ResumeID, "abc")
 	}
 	assertRawPopulated(t, msg)
 }
@@ -82,8 +82,8 @@ func TestParseLine_SystemInit_NoSessionID(t *testing.T) {
 	if msg.Type != agentrun.MessageInit {
 		t.Errorf("type = %q, want %q", msg.Type, agentrun.MessageInit)
 	}
-	if msg.Content != "" {
-		t.Errorf("Content = %q, want empty (no session_id)", msg.Content)
+	if msg.ResumeID != "" {
+		t.Errorf("ResumeID = %q, want empty (no session_id)", msg.ResumeID)
 	}
 }
 
@@ -113,8 +113,8 @@ func TestParseLine_StandaloneInit(t *testing.T) {
 	if msg.Type != agentrun.MessageInit {
 		t.Errorf("type = %q, want %q", msg.Type, agentrun.MessageInit)
 	}
-	if msg.Content != "xyz" {
-		t.Errorf("Content = %q, want %q (session_id)", msg.Content, "xyz")
+	if msg.ResumeID != "xyz" {
+		t.Errorf("ResumeID = %q, want %q (session_id)", msg.ResumeID, "xyz")
 	}
 	assertRawPopulated(t, msg)
 }
@@ -129,8 +129,8 @@ func TestParseLine_StandaloneInit_NoSessionID(t *testing.T) {
 	if msg.Type != agentrun.MessageInit {
 		t.Errorf("type = %q, want %q", msg.Type, agentrun.MessageInit)
 	}
-	if msg.Content != "" {
-		t.Errorf("Content = %q, want empty (no session_id)", msg.Content)
+	if msg.ResumeID != "" {
+		t.Errorf("ResumeID = %q, want empty (no session_id)", msg.ResumeID)
 	}
 }
 

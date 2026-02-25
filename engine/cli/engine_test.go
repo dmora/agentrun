@@ -1129,22 +1129,6 @@ func TestReadLoop_Timestamp(t *testing.T) {
 	}
 }
 
-func TestReadLoop_RawLine(t *testing.T) {
-	eng := cli.NewEngine(echoResumerBackend())
-	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t), Prompt: "hello"})
-	if err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-
-	msgs := drain(p)
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1, got %d", len(msgs))
-	}
-	if msgs[0].RawLine != "hello" {
-		t.Fatalf("expected RawLine 'hello', got %q", msgs[0].RawLine)
-	}
-}
-
 func TestReadLoop_SessionIDPreserved(t *testing.T) {
 	b := withResumer(testBackend{
 		spawnFn: func(_ agentrun.Session) (string, []string) {
@@ -1152,8 +1136,8 @@ func TestReadLoop_SessionIDPreserved(t *testing.T) {
 		},
 		parseFn: func(_ string) (agentrun.Message, error) {
 			return agentrun.Message{
-				Type:    agentrun.MessageInit,
-				Content: "ses_test123",
+				Type:     agentrun.MessageInit,
+				ResumeID: "ses_test123",
 			}, nil
 		},
 	})
@@ -1170,8 +1154,8 @@ func TestReadLoop_SessionIDPreserved(t *testing.T) {
 	if msgs[0].Type != agentrun.MessageInit {
 		t.Fatalf("expected MessageInit, got %v", msgs[0].Type)
 	}
-	if msgs[0].Content != "ses_test123" {
-		t.Fatalf("Content = %q, want %q (session ID must survive readLoop)", msgs[0].Content, "ses_test123")
+	if msgs[0].ResumeID != "ses_test123" {
+		t.Fatalf("ResumeID = %q, want %q (session ID must survive readLoop)", msgs[0].ResumeID, "ses_test123")
 	}
 }
 

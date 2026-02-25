@@ -56,8 +56,6 @@ func (e *Engine) resolveBinary() (string, error) {
 
 // Start spawns the ACP subprocess, performs the initialize + session handshake,
 // and returns a Process ready for multi-turn conversation.
-//
-// Session.AgentID is silently ignored — ACP agents are identified by binary.
 func (e *Engine) Start(ctx context.Context, session agentrun.Session, opts ...agentrun.Option) (agentrun.Process, error) {
 	startOpts := agentrun.ResolveOptions(opts...)
 

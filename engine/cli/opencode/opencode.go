@@ -107,7 +107,7 @@ func (b *Backend) SpawnArgs(session agentrun.Session) (string, []string) {
 		args = append(args, "--session", id)
 	}
 
-	if id := session.AgentID; id != "" && !jsonutil.ContainsNull(id) {
+	if id := session.Options[agentrun.OptionAgentID]; id != "" && !jsonutil.ContainsNull(id) {
 		args = append(args, "--agent", id)
 	}
 

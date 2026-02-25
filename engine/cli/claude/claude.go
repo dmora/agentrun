@@ -203,33 +203,14 @@ func baseArgs() []string {
 	}
 }
 
-// validatePositiveInt checks that opts[key], if non-empty, is a valid positive
-// integer with no null bytes. Returns an error with the given label for
-// diagnostics. Used by ResumeArgs for strict pre-validation.
-func validatePositiveInt(opts map[string]string, key, label string) error {
-	v := opts[key]
-	if v == "" {
-		return nil
-	}
-	if jsonutil.ContainsNull(v) {
-		return fmt.Errorf("claude: %s contains null bytes", label)
-	}
-	if n, err := strconv.Atoi(v); err != nil || n <= 0 {
-		return fmt.Errorf("claude: invalid %s %q: must be a positive integer", label, v)
-	}
-	return nil
-}
-
 // appendPositiveInt appends --flag <value> if opts[key] is a valid positive
 // integer. Invalid, zero, negative, or null-byte-containing values are
-// silently skipped. The value is round-tripped through Atoi/Itoa to ensure
+// silently skipped — validateSessionOptions catches these strictly in the
+// ResumeArgs path; SpawnArgs/StreamArgs have no error return.
+// The value is round-tripped through ParsePositiveIntOption/Itoa to ensure
 // only clean integers reach the CLI.
 func appendPositiveInt(args []string, opts map[string]string, key, flag string) []string {
-	v := opts[key]
-	if v == "" || jsonutil.ContainsNull(v) {
-		return args
-	}
-	if n, err := strconv.Atoi(v); err == nil && n > 0 {
+	if n, ok, err := agentrun.ParsePositiveIntOption(opts, key); ok && err == nil {
 		args = append(args, flag, strconv.Itoa(n))
 	}
 	return args
@@ -300,6 +281,15 @@ func resolvePermissionFlag(opts map[string]string) (string, bool) {
 	return "", false
 }
 
+// validatePositiveIntOption checks that opts[key] is absent, empty, or a valid
+// positive integer with no null bytes. Returns an error with the given label.
+func validatePositiveIntOption(opts map[string]string, key, label string) error {
+	if _, _, err := agentrun.ParsePositiveIntOption(opts, key); err != nil {
+		return fmt.Errorf("claude: invalid %s: %w", label, err)
+	}
+	return nil
+}
+
 // validateSessionOptions performs strict validation of session options used
 // by ResumeArgs. Checks mode, HITL, permission mode, max turns, and thinking
 // budget. Returns the first validation error encountered.
@@ -311,10 +301,10 @@ func validateSessionOptions(opts map[string]string) error {
 	if err := validatePermissionIfNoRoot(opts); err != nil {
 		return err
 	}
-	if err := validatePositiveInt(opts, agentrun.OptionMaxTurns, "max turns"); err != nil {
+	if err := validatePositiveIntOption(opts, agentrun.OptionMaxTurns, "max turns"); err != nil {
 		return err
 	}
-	return validatePositiveInt(opts, agentrun.OptionThinkingBudget, "thinking budget")
+	return validatePositiveIntOption(opts, agentrun.OptionThinkingBudget, "thinking budget")
 }
 
 // validateModeHITL checks OptionMode and OptionHITL for valid values.

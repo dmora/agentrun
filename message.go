@@ -83,17 +83,15 @@ type Message struct {
 	// Usage contains token usage data (typically on Text messages).
 	Usage *Usage `json:"usage,omitempty"`
 
+	// ResumeID is the backend-assigned session identifier for resume.
+	// Set exclusively on MessageInit messages. Consumers persist this value
+	// and pass it back via OptionResumeID to resume the session later.
+	// Empty means the backend could not capture a session ID.
+	ResumeID string `json:"resume_id,omitempty"`
+
 	// Raw is the original unparsed JSON from the backend.
 	// Backends populate this for pass-through or debugging.
 	Raw json.RawMessage `json:"raw,omitempty"`
-
-	// RawLine is the original unparsed output line from stdout.
-	// Used for crash-recovery log pipelines and audit logging.
-	//
-	// RawLine may contain sensitive data (credentials, PHI) from agent
-	// output. Implementations should redact or omit this field before
-	// writing to persistent audit logs.
-	RawLine string `json:"raw_line,omitempty"`
 
 	// Timestamp is when the message was produced.
 	// Producers should always set this; zero value serializes as

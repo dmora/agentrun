@@ -49,6 +49,7 @@ The root package (`agentrun`) defines the **language** — the shared concepts t
 | `MessageThinkingDelta` | Yes — any streaming reasoning model | `agentrun` | Universal streaming output |
 | `OptionMode` | Yes — every tool has plan vs act | `agentrun` | Universal session intent |
 | `OptionHITL` | Yes — every tool has supervised vs autonomous | `agentrun` | Universal supervision control |
+| `OptionAgentID` | Yes — OpenCode + ADK both select agents | `agentrun` | Universal agent selection |
 
 ### The Test in Practice
 
