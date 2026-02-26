@@ -68,6 +68,67 @@ func TestParsePositiveIntOption(t *testing.T) {
 	}
 }
 
+func TestValidateEnv(t *testing.T) {
+	tests := []struct {
+		name    string
+		env     map[string]string
+		wantErr bool
+	}{
+		{"nil", nil, false},
+		{"empty", map[string]string{}, false},
+		{"valid", map[string]string{"FOO": "bar"}, false},
+		{"unicode_key", map[string]string{"日本語": "value"}, false},
+		{"unicode_value", map[string]string{"KEY": "こんにちは"}, false},
+		{"empty_value", map[string]string{"KEY": ""}, false},
+		{"empty_key", map[string]string{"": "val"}, true},
+		{"equals_in_key", map[string]string{"A=B": "val"}, true},
+		{"null_in_key", map[string]string{"A\x00B": "val"}, true},
+		{"null_in_value", map[string]string{"KEY": "val\x00ue"}, true},
+		{"multiple_valid", map[string]string{"A": "1", "B": "2", "C": "3"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateEnv(tt.env)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateEnv() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestParseListOption(t *testing.T) {
+	tests := []struct {
+		name string
+		opts map[string]string
+		key  string
+		want []string
+	}{
+		{"absent", map[string]string{}, "k", nil},
+		{"empty", map[string]string{"k": ""}, "k", nil},
+		{"nil_map", nil, "k", nil},
+		{"single", map[string]string{"k": "/foo"}, "k", []string{"/foo"}},
+		{"multiple", map[string]string{"k": "/foo\n/bar\n/baz"}, "k", []string{"/foo", "/bar", "/baz"}},
+		{"empty_entries_skipped", map[string]string{"k": "/foo\n\n/bar\n"}, "k", []string{"/foo", "/bar"}},
+		{"whitespace_trimmed", map[string]string{"k": "  /foo  \n  /bar  "}, "k", []string{"/foo", "/bar"}},
+		{"null_bytes_skipped", map[string]string{"k": "/foo\n/b\x00ar\n/baz"}, "k", []string{"/foo", "/baz"}},
+		{"all_empty", map[string]string{"k": "\n\n\n"}, "k", nil},
+		{"all_null", map[string]string{"k": "/a\x00b"}, "k", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ParseListOption(tt.opts, tt.key)
+			if len(got) != len(tt.want) {
+				t.Fatalf("ParseListOption() = %v (len %d), want %v (len %d)", got, len(got), tt.want, len(tt.want))
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestParseBoolOption(t *testing.T) {
 	tests := []struct {
 		name    string

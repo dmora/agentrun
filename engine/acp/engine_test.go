@@ -835,6 +835,53 @@ func TestEngine_Start_InvalidHITL(t *testing.T) {
 	}
 }
 
+func TestEngine_Start_ValidateEnv_RejectsInvalid(t *testing.T) {
+	engine := newEngine(t)
+
+	tests := []struct {
+		name string
+		env  map[string]string
+	}{
+		{"empty_key", map[string]string{"": "val"}},
+		{"equals_in_key", map[string]string{"A=B": "val"}},
+		{"null_in_key", map[string]string{"A\x00B": "val"}},
+		{"null_in_value", map[string]string{"KEY": "val\x00ue"}},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	defer cancel()
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := engine.Start(ctx, agentrun.Session{
+				CWD: t.TempDir(),
+				Env: tt.env,
+			})
+			if err == nil {
+				t.Fatal("expected error for invalid env")
+			}
+		})
+	}
+}
+
+func TestEngine_Start_InvalidEffort(t *testing.T) {
+	engine := newEngine(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	defer cancel()
+
+	_, err := engine.Start(ctx, agentrun.Session{
+		CWD:     t.TempDir(),
+		Options: map[string]string{agentrun.OptionEffort: "xhigh"},
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid effort")
+	}
+	if !strings.Contains(err.Error(), "unknown effort") {
+		t.Errorf("error = %v, want to contain 'unknown effort'", err)
+	}
+}
+
 func TestEngine_Validate(t *testing.T) {
 	t.Run("valid binary", func(t *testing.T) {
 		engine := newEngine(t)

@@ -95,7 +95,7 @@ agentrun (interfaces)
 | `engine/cli/opencode` | OpenCode backend (Spawner, Parser, Resumer) |
 | `engine/cli/internal/errfmt` | Shared error formatting for CLI parsers |
 | `engine/cli/internal/jsonutil` | Shared JSON extraction helpers (GetString, GetInt, GetMap, ContainsNull) |
-| `engine/cli/internal/optutil` | Shared option resolution helpers (RootOptionsSet) |
+| `engine/cli/internal/optutil` | Shared option resolution + validation (RootOptionsSet, ValidateModeHITL) |
 | `engine/acp` | ACP engine: JSON-RPC 2.0 persistent subprocess, multi-turn without MCP cold boot |
 | `engine/api/adk` | Google ADK API engine |
 | `enginetest` | Namespace for compliance test suites (reserved for future root Engine/Process compliance) |
@@ -112,7 +112,11 @@ agentrun (interfaces)
 - **Separate examples module**: `examples/go.mod` avoids pulling example deps into library consumers
 - **Platform build constraints**: Engine implementations using OS-specific features (signals, process groups) use `//go:build !windows` on implementation files. Interface and option files remain platform-agnostic.
 - **Signal safety**: All process Signal/Kill calls use `signalProcess()` helper which handles `os.ErrProcessDone` — prevents errors on already-exited processes
-- **Cross-cutting session controls**: `Mode` (plan/act) and `HITL` (on/off) types live in root with `Valid()` methods. Root options and backend-specific options (e.g., `claude.OptionPermissionMode`) are independent control surfaces — root wins when set, backend used when absent. See `resolvePermissionFlag()` in Claude backend.
-- **Option parse helpers**: `ParsePositiveIntOption`, `ParseBoolOption`, `StringOption` in `session_options.go` — backends use these instead of scattered `strconv` parsing. Both typed parsers validate null bytes and return `(value, ok, error)`.
+- **Cross-cutting session controls**: `Mode` (plan/act), `HITL` (on/off), and `Effort` (low/medium/high/max) types live in root with `Valid()` methods. Root options and backend-specific options (e.g., `claude.OptionPermissionMode`) are independent control surfaces — root wins when set, backend used when absent. Effort validation runs at engine level (`Start()`) for symmetric spawn/resume coverage. See `resolvePermissionFlag()` in Claude backend and `resolveVariant()` in OpenCode backend.
+- **Session.Clone()**: Deep-copies Options and Env maps. Used by both CLI and ACP engines in `cloneSession()` — single implementation in root, no "keep in sync" duplication.
+- **ValidateModeHITL**: Shared in `engine/cli/internal/optutil` with prefix parameter for error messages. Claude and Codex backends delegate to it.
+- **Option parse helpers**: `ParsePositiveIntOption`, `ParseBoolOption`, `StringOption`, `ParseListOption` in `session_options.go` — backends use these instead of scattered `strconv` parsing. Both typed parsers validate null bytes and return `(value, ok, error)`.
+- **Session.Env**: Per-session environment variables, merged with parent via `MergeEnv(os.Environ(), session.Env)`. Validated by `ValidateEnv()` (keys: no empty/=/null; values: no null). Both CLI and ACP engines thread env through subprocess spawn. MergeEnv uses last-wins override semantics (appended entries shadow base); returns nil when extra is empty (inherit parent).
+- **OptionAddDirs**: Newline-separated absolute paths for additional directory access. Backends apply `filepath.IsAbs` + leading-dash guard per entry. Supported by Claude (`--add-dir`) and Codex (`--add-dir`); OpenCode silently ignores.
 - **RunTurn helper**: `runturn.go` encapsulates concurrent Send+drain pattern. Callers must provide a context with deadline/timeout. Safe for all engine types.
 - **Shared test infrastructure**: `testutil_test.go` contains `mockProcess` — shared across root-package test files.

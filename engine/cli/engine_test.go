@@ -1316,31 +1316,171 @@ func TestReadLoop_ScannerOverflow(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestStart_SessionDeepCopy(t *testing.T) {
-	var capturedOpts map[string]string
+	tests := []struct {
+		name    string
+		field   string // "options" or "env"
+		session agentrun.Session
+	}{
+		{
+			name:  "options",
+			field: "options",
+			session: agentrun.Session{
+				Options: map[string]string{"key": "original"},
+			},
+		},
+		{
+			name:  "env",
+			field: "env",
+			session: agentrun.Session{
+				Env: map[string]string{"FOO": "original"},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var capturedSession agentrun.Session
+			b := withResumer(testBackend{
+				spawnFn: func(s agentrun.Session) (string, []string) {
+					capturedSession = s
+					return binEcho, []string{"x"}
+				},
+				parseFn: textParser,
+			})
+			eng := cli.NewEngine(b)
+
+			tt.session.CWD = tempDir(t)
+			p, err := eng.Start(testCtx(t), tt.session)
+			if err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			drain(p)
+			_ = p.Wait()
+
+			// Mutate the original and verify captured is isolated.
+			switch tt.field {
+			case "options":
+				tt.session.Options["key"] = "mutated"
+				if capturedSession.Options["key"] != "original" {
+					t.Fatalf("Options not deep-copied: got %q", capturedSession.Options["key"])
+				}
+			case "env":
+				tt.session.Env["FOO"] = "mutated"
+				if capturedSession.Env["FOO"] != "original" {
+					t.Fatalf("Env not deep-copied: got %q", capturedSession.Env["FOO"])
+				}
+			}
+		})
+	}
+}
+
+func TestStart_ValidateEnv_RejectsInvalid(t *testing.T) {
 	b := withResumer(testBackend{
-		spawnFn: func(s agentrun.Session) (string, []string) {
-			capturedOpts = s.Options
+		spawnFn: func(_ agentrun.Session) (string, []string) {
 			return binEcho, []string{"x"}
 		},
 		parseFn: textParser,
 	})
 	eng := cli.NewEngine(b)
 
-	origOpts := map[string]string{"key": "original"}
+	tests := []struct {
+		name string
+		env  map[string]string
+	}{
+		{"empty_key", map[string]string{"": "val"}},
+		{"equals_in_key", map[string]string{"A=B": "val"}},
+		{"null_in_key", map[string]string{"A\x00B": "val"}},
+		{"null_in_value", map[string]string{"KEY": "val\x00ue"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := eng.Start(testCtx(t), agentrun.Session{
+				CWD: tempDir(t),
+				Env: tt.env,
+			})
+			if err == nil {
+				t.Fatal("expected error for invalid env")
+			}
+		})
+	}
+}
+
+func TestStart_EnvNil_InheritsParent(t *testing.T) {
+	b := withResumer(testBackend{
+		spawnFn: func(_ agentrun.Session) (string, []string) {
+			return binEcho, []string{"x"}
+		},
+		parseFn: textParser,
+	})
+	eng := cli.NewEngine(b)
+
+	// nil Env should succeed (inherit parent environment).
 	p, err := eng.Start(testCtx(t), agentrun.Session{
-		CWD:     tempDir(t),
-		Options: origOpts,
+		CWD: tempDir(t),
+		Env: nil,
+	})
+	if err != nil {
+		t.Fatalf("Start with nil env: %v", err)
+	}
+	drain(p)
+	_ = p.Wait()
+}
+
+func TestStart_EnvPropagation(t *testing.T) {
+	// Verify Session.Env reaches the subprocess by spawning printenv.
+	const envKey = "AGENTRUN_TEST_ENV_PROP"
+	const envVal = "propagated_value_42"
+
+	b := withResumer(testBackend{
+		spawnFn: func(_ agentrun.Session) (string, []string) {
+			return "printenv", []string{envKey}
+		},
+		parseFn: func(line string) (agentrun.Message, error) {
+			return agentrun.Message{
+				Type:    agentrun.MessageText,
+				Content: line,
+			}, nil
+		},
+	})
+	eng := cli.NewEngine(b)
+
+	p, err := eng.Start(testCtx(t), agentrun.Session{
+		CWD: tempDir(t),
+		Env: map[string]string{envKey: envVal},
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	drain(p)
+	found := false
+	for msg := range p.Output() {
+		if strings.Contains(msg.Content, envVal) {
+			found = true
+		}
+	}
 	_ = p.Wait()
 
-	// Mutating original should not affect captured.
-	origOpts["key"] = "mutated"
-	if capturedOpts["key"] != "original" {
-		t.Fatalf("session was not deep-copied: captured=%q", capturedOpts["key"])
+	if !found {
+		t.Fatalf("env var %s=%s not observed in subprocess output", envKey, envVal)
+	}
+}
+
+func TestStart_InvalidEffort(t *testing.T) {
+	b := withResumer(testBackend{
+		spawnFn: func(_ agentrun.Session) (string, []string) {
+			return binEcho, []string{"x"}
+		},
+		parseFn: textParser,
+	})
+	eng := cli.NewEngine(b)
+
+	_, err := eng.Start(testCtx(t), agentrun.Session{
+		CWD:     tempDir(t),
+		Options: map[string]string{agentrun.OptionEffort: "xhigh"},
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid effort")
+	}
+	if !strings.Contains(err.Error(), "unknown effort") {
+		t.Errorf("error = %v, want to contain 'unknown effort'", err)
 	}
 }
 

@@ -288,6 +288,166 @@ func TestSessionOptions_ResumeID_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestEffortValid(t *testing.T) {
+	valid := []Effort{EffortLow, EffortMedium, EffortHigh, EffortMax}
+	for _, e := range valid {
+		if !e.Valid() {
+			t.Errorf("Effort(%q).Valid() = false, want true", e)
+		}
+	}
+	invalid := []Effort{"", "invalid", "LOW", "Medium", "xhigh"}
+	for _, e := range invalid {
+		if e.Valid() {
+			t.Errorf("Effort(%q).Valid() = true, want false", e)
+		}
+	}
+}
+
+func TestMergeEnv_Empty(t *testing.T) {
+	base := []string{"PATH=/usr/bin", "HOME=/home/user"}
+	got := MergeEnv(base, nil)
+	if got != nil {
+		t.Fatalf("MergeEnv with nil extra should return nil, got %v", got)
+	}
+	got = MergeEnv(base, map[string]string{})
+	if got != nil {
+		t.Fatalf("MergeEnv with empty extra should return nil, got %v", got)
+	}
+}
+
+func TestMergeEnv_Appends(t *testing.T) {
+	base := []string{"PATH=/usr/bin", "HOME=/home/user"}
+	extra := map[string]string{"FOO": "bar"}
+	got := MergeEnv(base, extra)
+	if len(got) != 3 {
+		t.Fatalf("want 3 entries, got %d: %v", len(got), got)
+	}
+	if got[0] != "PATH=/usr/bin" || got[1] != "HOME=/home/user" {
+		t.Errorf("base entries should be preserved: %v", got[:2])
+	}
+	if got[2] != "FOO=bar" {
+		t.Errorf("extra entry: want FOO=bar, got %q", got[2])
+	}
+}
+
+func TestMergeEnv_OverrideByAppend(t *testing.T) {
+	// When the same key exists in base and extra, the last entry wins
+	// per exec.Cmd.Env behavior (later entries override earlier ones).
+	base := []string{"FOO=original"}
+	extra := map[string]string{"FOO": "override"}
+	got := MergeEnv(base, extra)
+	if len(got) != 2 {
+		t.Fatalf("want 2 entries, got %d: %v", len(got), got)
+	}
+	// Both entries present; exec.Cmd uses the last one.
+	if got[0] != "FOO=original" {
+		t.Errorf("first: want FOO=original, got %q", got[0])
+	}
+	if got[1] != "FOO=override" {
+		t.Errorf("second: want FOO=override, got %q", got[1])
+	}
+}
+
+func TestMergeEnv_NilBase(t *testing.T) {
+	extra := map[string]string{"FOO": "bar"}
+	got := MergeEnv(nil, extra)
+	if len(got) != 1 || got[0] != "FOO=bar" {
+		t.Fatalf("want [FOO=bar], got %v", got)
+	}
+}
+
+func TestMergeEnv_UnicodeValues(t *testing.T) {
+	base := []string{"LANG=en_US.UTF-8"}
+	extra := map[string]string{"GREETING": "こんにちは"}
+	got := MergeEnv(base, extra)
+	if len(got) != 2 {
+		t.Fatalf("want 2 entries, got %d", len(got))
+	}
+	if got[1] != "GREETING=こんにちは" {
+		t.Errorf("want GREETING=こんにちは, got %q", got[1])
+	}
+}
+
+func TestSessionJSON_WithEnv(t *testing.T) {
+	s := Session{
+		ID:  "s1",
+		CWD: "/tmp",
+		Env: map[string]string{"FOO": "bar"},
+	}
+	data, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got Session
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Env["FOO"] != "bar" {
+		t.Errorf("Env[FOO] = %q, want bar", got.Env["FOO"])
+	}
+}
+
+func TestSessionJSON_EnvOmitEmpty(t *testing.T) {
+	s := Session{ID: "s1", CWD: "/tmp"}
+	data, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, ok := raw["env"]; ok {
+		t.Error("env field should be omitted when nil")
+	}
+}
+
+func TestSessionEnv_MapAliasing(t *testing.T) {
+	original := Session{
+		ID:  "s1",
+		Env: map[string]string{"key": "val"},
+	}
+	copied := original
+	copied.Env["key"] = "changed"
+
+	// Document: shallow copy shares the Env map (same as Options).
+	if original.Env["key"] != "changed" {
+		t.Fatal("Session is a value type with a reference-type map; shallow copy shares Env")
+	}
+}
+
+func TestSessionClone(t *testing.T) {
+	original := Session{
+		ID:      "s1",
+		Options: map[string]string{"key": "original"},
+		Env:     map[string]string{"FOO": "bar"},
+	}
+	cloned := original.Clone()
+
+	cloned.Options["key"] = "modified"
+	cloned.Env["FOO"] = "modified"
+
+	if original.Options["key"] != "original" {
+		t.Error("Clone did not deep-copy Options")
+	}
+	if original.Env["FOO"] != "bar" {
+		t.Error("Clone did not deep-copy Env")
+	}
+}
+
+func TestSessionClone_NilMaps(t *testing.T) {
+	original := Session{ID: "s1"}
+	cloned := original.Clone()
+
+	// Clone of nil maps should remain nil (not empty map).
+	if cloned.Options != nil {
+		t.Error("Clone of nil Options should be nil")
+	}
+	if cloned.Env != nil {
+		t.Error("Clone of nil Env should be nil")
+	}
+}
+
 func TestSessionOptions_MapAliasing(t *testing.T) {
 	original := Session{
 		ID:      "s1",

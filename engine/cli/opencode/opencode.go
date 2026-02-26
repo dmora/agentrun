@@ -132,8 +132,9 @@ func (b *Backend) SpawnArgs(session agentrun.Session) (string, []string) {
 // contains null bytes.
 //
 // Note on HITL: OptionHITL=off requires OPENCODE_AUTO_APPROVE=1 env var
-// on the subprocess. The CLI engine does not yet support per-backend env
-// vars, so consumers must set this externally.
+// on the subprocess. Use Session.Env to pass this per-session:
+//
+//	session.Env = map[string]string{"OPENCODE_AUTO_APPROVE": "1"}
 func (b *Backend) ResumeArgs(session agentrun.Session, initialPrompt string) (string, []string, error) {
 	sid := b.resolveSessionID(session)
 	if sid == "" {
@@ -175,6 +176,32 @@ func baseArgs() []string {
 	return []string{"run", "--format", "json"}
 }
 
+// effortToVariant maps root Effort values to OpenCode --variant values.
+// medium has no OpenCode equivalent and is intentionally absent.
+var effortToVariant = map[agentrun.Effort]Variant{
+	agentrun.EffortLow:  VariantLow,
+	agentrun.EffortHigh: VariantHigh,
+	agentrun.EffortMax:  VariantMax,
+}
+
+// resolveVariant returns the --variant value from root OptionEffort
+// (precedence) or backend-specific OptionVariant.
+// Returns empty string when no variant should be emitted.
+func resolveVariant(opts map[string]string) string {
+	// Root OptionEffort takes precedence when it maps to a variant.
+	if v := opts[agentrun.OptionEffort]; v != "" && !jsonutil.ContainsNull(v) {
+		if mapped, ok := effortToVariant[agentrun.Effort(v)]; ok {
+			return string(mapped)
+		}
+		// Unmapped effort (e.g., "medium") — fall through to OptionVariant.
+	}
+	// Fall back to backend-specific OptionVariant.
+	if v := opts[OptionVariant]; v != "" && !jsonutil.ContainsNull(v) {
+		return v
+	}
+	return ""
+}
+
 // appendCommonArgs appends model, thinking, and variant flags.
 // Mode, HITL, SystemPrompt, and MaxTurns are silently ignored
 // (OpenCode has no CLI flags for these).
@@ -187,7 +214,7 @@ func appendCommonArgs(args []string, session agentrun.Session) []string {
 		args = append(args, "--thinking")
 	}
 
-	if v := session.Options[OptionVariant]; v != "" && !jsonutil.ContainsNull(v) {
+	if v := resolveVariant(session.Options); v != "" {
 		args = append(args, "--variant", v)
 	}
 

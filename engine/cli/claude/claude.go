@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -237,6 +238,18 @@ func appendSessionArgs(args []string, session agentrun.Session) []string {
 	args = appendPositiveInt(args, session.Options, agentrun.OptionMaxTurns, "--max-turns")
 	args = appendPositiveInt(args, session.Options, agentrun.OptionThinkingBudget, "--max-thinking-tokens")
 
+	// Effort: Claude CLI supports low, medium, high (max has no equivalent).
+	if e := agentrun.Effort(session.Options[agentrun.OptionEffort]); e.Valid() && e != agentrun.EffortMax {
+		args = append(args, "--effort", string(e))
+	}
+
+	// Additional directories.
+	for _, dir := range agentrun.ParseListOption(session.Options, agentrun.OptionAddDirs) {
+		if filepath.IsAbs(dir) && !strings.HasPrefix(dir, "-") {
+			args = append(args, "--add-dir", dir)
+		}
+	}
+
 	return args
 }
 
@@ -289,7 +302,7 @@ func validatePositiveIntOption(opts map[string]string, key, label string) error 
 // by ResumeArgs. Checks mode, HITL, permission mode, max turns, and thinking
 // budget. Returns the first validation error encountered.
 func validateSessionOptions(opts map[string]string) error {
-	if err := validateModeHITL(opts); err != nil {
+	if err := optutil.ValidateModeHITL("claude", opts); err != nil {
 		return err
 	}
 	// Validate permission only when root options are absent (independent surfaces).
@@ -299,16 +312,11 @@ func validateSessionOptions(opts map[string]string) error {
 	if err := validatePositiveIntOption(opts, agentrun.OptionMaxTurns, "max turns"); err != nil {
 		return err
 	}
-	return validatePositiveIntOption(opts, agentrun.OptionThinkingBudget, "thinking budget")
-}
-
-// validateModeHITL checks OptionMode and OptionHITL for valid values.
-func validateModeHITL(opts map[string]string) error {
-	if mode := agentrun.Mode(opts[agentrun.OptionMode]); mode != "" && !mode.Valid() {
-		return fmt.Errorf("claude: unknown mode %q: valid: plan, act", mode)
+	if err := validatePositiveIntOption(opts, agentrun.OptionThinkingBudget, "thinking budget"); err != nil {
+		return err
 	}
-	if hitl := agentrun.HITL(opts[agentrun.OptionHITL]); hitl != "" && !hitl.Valid() {
-		return fmt.Errorf("claude: unknown hitl %q: valid: on, off", hitl)
+	if e := agentrun.Effort(opts[agentrun.OptionEffort]); e != "" && !e.Valid() {
+		return fmt.Errorf("claude: unknown effort %q: valid: low, medium, high, max", e)
 	}
 	return nil
 }

@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -80,6 +79,11 @@ func (e *Engine) Start(_ context.Context, session agentrun.Session, opts ...agen
 		return nil, fmt.Errorf("cli: CWD is not a directory: %s", session.CWD)
 	}
 
+	// Validate cross-cutting options early (before SpawnArgs/StreamArgs).
+	if e := agentrun.Effort(session.Options[agentrun.OptionEffort]); e != "" && !e.Valid() {
+		return nil, fmt.Errorf("cli: unknown effort %q: valid: low, medium, high, max", e)
+	}
+
 	// Resolve capabilities once.
 	caps := resolveCapabilities(e.backend)
 
@@ -104,18 +108,26 @@ func (e *Engine) Start(_ context.Context, session agentrun.Session, opts ...agen
 		return nil, fmt.Errorf("%w: %s: %w", agentrun.ErrUnavailable, binary, err)
 	}
 
-	cmd, stdin, stdout, err := spawnCmd(resolvedBinary, args, session.CWD, useStreamer)
+	// Validate and resolve environment variables.
+	if err := agentrun.ValidateEnv(session.Env); err != nil {
+		return nil, fmt.Errorf("cli: %w", err)
+	}
+	env := agentrun.MergeEnv(os.Environ(), session.Env)
+
+	cmd, stdin, stdout, err := spawnCmd(resolvedBinary, args, session.CWD, useStreamer, env)
 	if err != nil {
 		return nil, fmt.Errorf("cli: start: %w", err)
 	}
 
-	return newProcess(e.backend, caps, session, e.opts, cmd, stdin, stdout), nil
+	return newProcess(e.backend, caps, session, e.opts, env, cmd, stdin, stdout), nil
 }
 
 // spawnCmd builds, configures, and starts an exec.Cmd.
-func spawnCmd(binary string, args []string, dir string, wantStdin bool) (*exec.Cmd, io.WriteCloser, io.ReadCloser, error) {
+// env is passed directly to cmd.Env — nil inherits the parent environment.
+func spawnCmd(binary string, args []string, dir string, wantStdin bool, env []string) (*exec.Cmd, io.WriteCloser, io.ReadCloser, error) {
 	cmd := exec.Command(binary, args...)
 	cmd.Dir = dir
+	cmd.Env = env
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -150,10 +162,7 @@ func validateSendCapability(caps capabilities) error {
 	return nil
 }
 
-// cloneSession returns a deep copy of session, cloning the Options map.
+// cloneSession returns a deep copy of session, cloning Options and Env maps.
 func cloneSession(s agentrun.Session) agentrun.Session {
-	if s.Options != nil {
-		s.Options = maps.Clone(s.Options)
-	}
-	return s
+	return s.Clone()
 }

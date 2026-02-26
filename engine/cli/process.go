@@ -56,6 +56,7 @@ type process struct {
 	caps    capabilities
 	session agentrun.Session
 	opts    EngineOptions
+	env     []string // resolved env for subprocess; nil = inherit parent
 
 	output chan agentrun.Message
 
@@ -82,6 +83,7 @@ func newProcess(
 	caps capabilities,
 	session agentrun.Session,
 	opts EngineOptions,
+	env []string,
 	cmd *exec.Cmd,
 	stdin io.WriteCloser,
 	stdout io.ReadCloser,
@@ -93,6 +95,7 @@ func newProcess(
 		caps:       caps,
 		session:    session,
 		opts:       opts,
+		env:        env,
 		output:     make(chan agentrun.Message, opts.OutputBuffer),
 		cmd:        cmd,
 		stdin:      stdin,
@@ -400,7 +403,7 @@ func (p *process) resumeAfterCleanExit(ctx context.Context, message string) erro
 		return fmt.Errorf("%w: %s: %w", agentrun.ErrUnavailable, binary, err)
 	}
 
-	cmd, stdin, stdout, err := spawnCmd(resolvedBinary, args, p.session.CWD, p.caps.streamer != nil)
+	cmd, stdin, stdout, err := spawnCmd(resolvedBinary, args, p.session.CWD, p.caps.streamer != nil, p.env)
 	if err != nil {
 		return fmt.Errorf("cli: resume: %w", err)
 	}
@@ -433,7 +436,7 @@ func (p *process) resumeAfterCleanExit(ctx context.Context, message string) erro
 
 // spawnReplacement starts a new subprocess and readLoop after a Resumer swap.
 func (p *process) spawnReplacement(binary string, args []string) error {
-	cmd, stdin, stdout, err := spawnCmd(binary, args, p.session.CWD, p.caps.streamer != nil)
+	cmd, stdin, stdout, err := spawnCmd(binary, args, p.session.CWD, p.caps.streamer != nil, p.env)
 	if err != nil {
 		p.failReplacement(fmt.Errorf("cli: resume: %w", err))
 		return err
