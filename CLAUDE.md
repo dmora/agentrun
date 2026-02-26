@@ -63,7 +63,12 @@ agentrun (interfaces)
 │   ├── engine.go        ← Engine, NewEngine, Validate, Start (!windows)
 │   ├── process.go       ← process impl, readLoop, signalProcess (!windows)
 │   ├── options.go       ← EngineOptions, EngineOption, With* functions
+│   ├── internal/        ← Shared helpers (not importable by consumers)
+│   │   ├── errfmt/      ← Error formatting for CLI parsers
+│   │   ├── jsonutil/    ← JSON extraction (GetString, GetInt, ContainsNull)
+│   │   └── optutil/     ← Option resolution (RootOptionsSet)
 │   ├── claude/          ← Claude Code backend
+│   ├── codex/           ← Codex CLI backend
 │   └── opencode/        ← OpenCode backend
 ├── engine/acp/          ← ACP engine: JSON-RPC 2.0 persistent subprocess
 │   ├── conn.go          ← Bidirectional JSON-RPC 2.0 Conn (platform-agnostic)
@@ -74,7 +79,8 @@ agentrun (interfaces)
 │   └── process.go       ← process impl, Send, Stop, emit (!windows)
 ├── engine/api/
 │   └── adk/             ← Google ADK API engine
-└── enginetest/          ← Compliance test suites
+└── enginetest/          ← Compliance test suites (namespace for future root compliance)
+    └── clitest/         ← CLI backend compliance: RunBackendTests, RunSpawner/Parser/ResumerTests
 ```
 
 ## Package Structure
@@ -85,10 +91,15 @@ agentrun (interfaces)
 | `filter` | Composable channel middleware for message streams (Completed, Filter, ResultOnly, IsDelta) |
 | `engine/cli` | CLI subprocess engine: Backend→Engine adapter, process lifecycle, signal handling |
 | `engine/cli/claude` | Claude Code backend (all 5 cli interfaces: Spawner, Parser, Resumer, Streamer, InputFormatter) |
+| `engine/cli/codex` | Codex CLI backend (Spawner, Parser, Resumer — resume-per-turn) |
 | `engine/cli/opencode` | OpenCode backend (Spawner, Parser, Resumer) |
+| `engine/cli/internal/errfmt` | Shared error formatting for CLI parsers |
+| `engine/cli/internal/jsonutil` | Shared JSON extraction helpers (GetString, GetInt, GetMap, ContainsNull) |
+| `engine/cli/internal/optutil` | Shared option resolution helpers (RootOptionsSet) |
 | `engine/acp` | ACP engine: JSON-RPC 2.0 persistent subprocess, multi-turn without MCP cold boot |
 | `engine/api/adk` | Google ADK API engine |
-| `enginetest` | Shared compliance test suites (RunSpawnerTests, etc.) |
+| `enginetest` | Namespace for compliance test suites (reserved for future root Engine/Process compliance) |
+| `enginetest/clitest` | CLI backend compliance: RunBackendTests discovers capabilities via type assertion, RunSpawner/Parser/ResumerTests |
 | `examples/` | Separate module with runnable examples |
 
 ## Key Conventions
@@ -97,7 +108,7 @@ agentrun (interfaces)
 - **Interfaces at consumer side**: `engine/cli/interfaces.go` defines Spawner/Parser/etc; backends implement them
 - **Capabilities via type assertion**: optional features (Resumer, Streamer, InputFormatter) are separate interfaces resolved once at Start — no boolean flags
 - **Function-field injection** for test doubles — no mock generation libraries
-- **`enginetest/` compliance suites**: backends prove correctness via `Run*Tests` functions with factory callbacks
+- **`enginetest/clitest` compliance suites**: backends prove correctness via `clitest.RunBackendTests(t, factory)` — discovers Resumer/Streamer/InputFormatter via type assertion. Individual `RunSpawnerTests`, `RunParserTests`, `RunResumerTests` also exported for backends with unusual needs.
 - **Separate examples module**: `examples/go.mod` avoids pulling example deps into library consumers
 - **Platform build constraints**: Engine implementations using OS-specific features (signals, process groups) use `//go:build !windows` on implementation files. Interface and option files remain platform-agnostic.
 - **Signal safety**: All process Signal/Kill calls use `signalProcess()` helper which handles `os.ErrProcessDone` — prevents errors on already-exited processes

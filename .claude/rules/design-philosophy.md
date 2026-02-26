@@ -36,7 +36,7 @@ When adding or modifying constants, types, or options, apply this decision rule:
 
 ## Independent Control Surfaces
 
-Root options (`OptionMode`/`OptionHITL`) and backend options (`OptionPermissionMode`) are independent:
+Root options (`OptionMode`/`OptionHITL`) and backend options (`claude.OptionPermissionMode`, `codex.OptionSandbox`) are independent:
 - Root set → backend-specific option ignored
 - Root absent → backend-specific option used
 - Never combined or cascaded
