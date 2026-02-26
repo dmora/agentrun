@@ -210,6 +210,15 @@ func buildResumeCommand(threadID string, session agentrun.Session) []string {
 	return args
 }
 
+// codexEffort maps root Effort values to Codex model_reasoning_effort values.
+// max → "xhigh" is a Codex-specific mapping.
+var codexEffort = map[agentrun.Effort]string{
+	agentrun.EffortLow:    "low",
+	agentrun.EffortMedium: "medium",
+	agentrun.EffortHigh:   "high",
+	agentrun.EffortMax:    "xhigh",
+}
+
 // appendCommonArgs appends flags available on both exec and exec resume.
 func appendCommonArgs(args []string, session agentrun.Session) []string {
 	if m := session.Model; m != "" && !jsonutil.ContainsNull(m) && !strings.HasPrefix(m, "-") {
@@ -223,6 +232,16 @@ func appendCommonArgs(args []string, session agentrun.Session) []string {
 	if session.Options[OptionSkipGitCheck] != "" {
 		args = append(args, "--skip-git-repo-check")
 	}
+
+	// Effort: Codex supports low, medium, high, max (max → "xhigh").
+	if e := agentrun.Effort(session.Options[agentrun.OptionEffort]); e != "" {
+		if v, ok := codexEffort[e]; ok {
+			args = append(args, "-c", "model_reasoning_effort="+v)
+		}
+	}
+
+	// Additional directories.
+	args = optutil.AppendAddDirs(args, session.Options, "--add-dir")
 
 	return args
 }
@@ -314,23 +333,15 @@ func resolveExecPolicy(opts map[string]string) (string, bool) {
 }
 
 // validateSessionOptions performs strict validation of session options used
-// by ResumeArgs. Checks mode, HITL, and sandbox enum values.
+// by ResumeArgs. Checks mode, HITL, sandbox enum, and effort values.
 func validateSessionOptions(opts map[string]string) error {
-	if err := validateModeHITL(opts); err != nil {
+	if err := optutil.ValidateModeHITL("codex", opts); err != nil {
 		return err
 	}
-	return validateSandboxIfNoRoot(opts)
-}
-
-// validateModeHITL checks OptionMode and OptionHITL for valid values.
-func validateModeHITL(opts map[string]string) error {
-	if mode := agentrun.Mode(opts[agentrun.OptionMode]); mode != "" && !mode.Valid() {
-		return fmt.Errorf("codex: unknown mode %q: valid: plan, act", mode)
+	if err := validateSandboxIfNoRoot(opts); err != nil {
+		return err
 	}
-	if hitl := agentrun.HITL(opts[agentrun.OptionHITL]); hitl != "" && !hitl.Valid() {
-		return fmt.Errorf("codex: unknown hitl %q: valid: on, off", hitl)
-	}
-	return nil
+	return optutil.ValidateEffort("codex", opts)
 }
 
 // validateSandboxIfNoRoot validates OptionSandbox only when root options

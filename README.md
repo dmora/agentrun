@@ -69,8 +69,31 @@ The root `agentrun` package defines four core types:
 
 - **Engine** — starts and validates agent sessions
 - **Process** — an active session handle with output channel
-- **Session** — minimal session state passed to engines
+- **Session** — minimal session state passed to engines (prompt, model, CWD, options, env)
 - **Message** — structured output from agent processes
+
+### Session Configuration
+
+Sessions carry cross-cutting options that backends translate into CLI flags or API parameters:
+
+```go
+session := agentrun.Session{
+    CWD:    "/path/to/project",
+    Prompt: "Refactor the auth module",
+    Model:  "claude-sonnet-4-20250514",
+    Options: map[string]string{
+        agentrun.OptionEffort:  "high",                    // reasoning effort (low/medium/high/max)
+        agentrun.OptionAddDirs: "/shared/lib\n/shared/proto", // additional directories (newline-separated)
+        agentrun.OptionMode:   "act",                      // plan or act
+        agentrun.OptionHITL:   "off",                      // human-in-the-loop on/off
+    },
+    Env: map[string]string{
+        "OPENCODE_AUTO_APPROVE": "1", // per-session env vars
+    },
+}
+```
+
+Backend-specific options use a namespace prefix (e.g., `claude.OptionPermissionMode`, `codex.OptionSandbox`). See each backend package for available options.
 
 Engine implementations live in subpackages. CLI backends share a generic `cli.Engine` that delegates to backend-specific `Spawner` and `Parser` interfaces. Optional capabilities (resume, streaming) are discovered via type assertion.
 

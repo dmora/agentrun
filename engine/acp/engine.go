@@ -6,7 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"maps"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sync"
@@ -70,13 +70,24 @@ func (e *Engine) Start(ctx context.Context, session agentrun.Session, opts ...ag
 		return nil, fmt.Errorf("acp: invalid HITL value: %q", hitl)
 	}
 
+	// Validate cross-cutting options.
+	if e := agentrun.Effort(session.Options[agentrun.OptionEffort]); e != "" && !e.Valid() {
+		return nil, fmt.Errorf("acp: unknown effort %q: valid: low, medium, high, max", e)
+	}
+
 	// Validate CWD.
 	if session.CWD != "" && !filepath.IsAbs(session.CWD) {
 		return nil, fmt.Errorf("acp: CWD must be an absolute path, got %q", session.CWD)
 	}
 
+	// Validate and resolve environment variables.
+	if err := agentrun.ValidateEnv(session.Env); err != nil {
+		return nil, fmt.Errorf("acp: %w", err)
+	}
+	env := agentrun.MergeEnv(os.Environ(), session.Env)
+
 	// Spawn subprocess.
-	cmd, stdin, stdout, err := e.spawnSubprocess(session.CWD)
+	cmd, stdin, stdout, err := e.spawnSubprocess(session.CWD, env)
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +123,8 @@ func (e *Engine) Start(ctx context.Context, session agentrun.Session, opts ...ag
 }
 
 // spawnSubprocess resolves the binary and starts the ACP agent process.
-func (e *Engine) spawnSubprocess(cwd string) (*exec.Cmd, io.WriteCloser, io.ReadCloser, error) {
+// env is passed directly to cmd.Env — nil inherits the parent environment.
+func (e *Engine) spawnSubprocess(cwd string, env []string) (*exec.Cmd, io.WriteCloser, io.ReadCloser, error) {
 	resolvedBinary, err := e.resolveBinary()
 	if err != nil {
 		return nil, nil, nil, err
@@ -122,6 +134,7 @@ func (e *Engine) spawnSubprocess(cwd string) (*exec.Cmd, io.WriteCloser, io.Read
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
+	cmd.Env = env
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -166,10 +179,7 @@ func wireReadLoop(conn *Conn, p *process, hitl agentrun.HITL, opts EngineOptions
 	}()
 }
 
-// cloneSession returns a deep copy of session, cloning the Options map.
+// cloneSession returns a deep copy of session, cloning Options and Env maps.
 func cloneSession(s agentrun.Session) agentrun.Session {
-	if s.Options != nil {
-		s.Options = maps.Clone(s.Options)
-	}
-	return s
+	return s.Clone()
 }

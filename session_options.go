@@ -38,6 +38,52 @@ func ParsePositiveIntOption(opts map[string]string, key string) (int, bool, erro
 	return n, true, nil
 }
 
+// ValidateEnv checks all keys and values in env.
+// Keys must be non-empty and must not contain '=' or null bytes.
+// Values must not contain null bytes.
+// Returns the first validation error encountered.
+// Nil or empty env is valid.
+func ValidateEnv(env map[string]string) error {
+	for k, v := range env {
+		if k == "" {
+			return fmt.Errorf("env key must not be empty")
+		}
+		if strings.ContainsRune(k, '=') {
+			return fmt.Errorf("env key %q must not contain '='", k)
+		}
+		if strings.ContainsRune(k, '\x00') {
+			return fmt.Errorf("env key %q contains null byte", k)
+		}
+		if strings.Contains(v, "\x00") {
+			return fmt.Errorf("env value for key %q contains null byte", k)
+		}
+	}
+	return nil
+}
+
+// ParseListOption splits a newline-separated option value into individual
+// entries. Empty entries and entries containing null bytes are skipped.
+// Returns nil when the key is absent or empty.
+func ParseListOption(opts map[string]string, key string) []string {
+	v := opts[key]
+	if v == "" {
+		return nil
+	}
+	parts := strings.Split(v, "\n")
+	result := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" || strings.Contains(p, "\x00") {
+			continue
+		}
+		result = append(result, p)
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
 // ParseBoolOption returns the boolean value for key in opts.
 // If the key is absent or empty, it returns (false, false, nil).
 // Truthy values: "true", "on", "1", "yes" (case-insensitive).

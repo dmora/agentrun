@@ -1172,6 +1172,132 @@ func TestResolvePermissionFlag_BackendOnly(t *testing.T) {
 	}
 }
 
+// --- Effort option tests ---
+
+func TestSpawnArgs_Effort(t *testing.T) {
+	tests := []struct {
+		name     string
+		effort   string
+		contains []string
+		excludes []string
+	}{
+		{"low", "low", []string{"--effort", "low"}, nil},
+		{"medium", "medium", []string{"--effort", "medium"}, nil},
+		{"high", "high", []string{"--effort", "high"}, nil},
+		{"max_skipped", "max", nil, []string{"--effort"}},
+		{"empty", "", nil, []string{"--effort"}},
+		{"invalid", "xhigh", nil, []string{"--effort"}},
+	}
+
+	b := New()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			session := agentrun.Session{
+				Prompt:  testPrompt,
+				Options: map[string]string{agentrun.OptionEffort: tt.effort},
+			}
+			_, args := b.SpawnArgs(session)
+			assertArgs(t, args, tt.contains, tt.excludes, testPrompt, false)
+		})
+	}
+}
+
+func TestResumeArgs_Effort(t *testing.T) {
+	b := New()
+	tests := []struct {
+		name     string
+		effort   string
+		contains []string
+		excludes []string
+		wantErr  bool
+	}{
+		{"low", "low", []string{"--effort", "low"}, nil, false},
+		{"medium", "medium", []string{"--effort", "medium"}, nil, false},
+		{"high", "high", []string{"--effort", "high"}, nil, false},
+		{"max_skipped", "max", nil, []string{"--effort"}, false},
+		{"invalid", "xhigh", nil, nil, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			session := agentrun.Session{
+				Options: map[string]string{
+					agentrun.OptionResumeID: testResumeID,
+					agentrun.OptionEffort:   tt.effort,
+				},
+			}
+			_, args, err := b.ResumeArgs(session, testPrompt)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err == nil {
+				assertArgs(t, args, tt.contains, tt.excludes, testPrompt, false)
+			}
+		})
+	}
+}
+
+// --- AddDirs option tests ---
+
+func TestSpawnArgs_AddDirs(t *testing.T) {
+	tests := []struct {
+		name     string
+		addDirs  string
+		contains []string
+		excludes []string
+	}{
+		{"single", "/foo/bar", []string{"--add-dir", "/foo/bar"}, nil},
+		{"multiple", "/foo\n/bar", []string{"--add-dir", "/foo", "--add-dir", "/bar"}, nil},
+		{"skip_relative", "relative/path", nil, []string{"--add-dir"}},
+		{"skip_leading_dash", "-/foo", nil, []string{"--add-dir"}},
+		{"mixed", "/good\nrelative\n/also-good", []string{"--add-dir", "/good", "--add-dir", "/also-good"}, nil},
+		{"empty", "", nil, []string{"--add-dir"}},
+	}
+
+	b := New()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			session := agentrun.Session{
+				Prompt:  testPrompt,
+				Options: map[string]string{agentrun.OptionAddDirs: tt.addDirs},
+			}
+			_, args := b.SpawnArgs(session)
+			assertArgs(t, args, tt.contains, tt.excludes, testPrompt, false)
+		})
+	}
+}
+
+func TestResumeArgs_AddDirs(t *testing.T) {
+	tests := []struct {
+		name     string
+		addDirs  string
+		contains []string
+		excludes []string
+	}{
+		{"single", "/foo/bar", []string{"--add-dir", "/foo/bar"}, nil},
+		{"skip_relative", "relative/path", nil, []string{"--add-dir"}},
+		{"skip_leading_dash", "-/foo", nil, []string{"--add-dir"}},
+		{"mixed", "/good\nrelative\n/also-good", []string{"--add-dir", "/good", "--add-dir", "/also-good"}, nil},
+	}
+
+	b := New()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			session := agentrun.Session{
+				Options: map[string]string{
+					agentrun.OptionResumeID: testResumeID,
+					agentrun.OptionAddDirs:  tt.addDirs,
+				},
+			}
+			_, args, err := b.ResumeArgs(session, testPrompt)
+			if err != nil {
+				t.Fatalf("ResumeArgs: %v", err)
+			}
+			assertArgs(t, args, tt.contains, tt.excludes, testPrompt, false)
+		})
+	}
+}
+
 // --- Helpers ---
 
 func assertArgs(t *testing.T, args, contains, excludes []string, last string, noNullByte bool) {

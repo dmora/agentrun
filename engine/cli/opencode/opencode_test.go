@@ -490,6 +490,138 @@ func assertArgsEqual(t *testing.T, got, want []string) {
 	}
 }
 
+// --- Effort / resolveVariant tests ---
+
+func TestSpawnArgs_Effort(t *testing.T) {
+	tests := []struct {
+		name     string
+		effort   string
+		wantFlag string // expected --variant value, empty means no --variant
+	}{
+		{"low", "low", "low"},
+		{"high", "high", "high"},
+		{"max", "max", "max"},
+		{"medium_no_equivalent", "medium", ""},
+		{"invalid", "xhigh", ""},
+		{"empty", "", ""},
+	}
+
+	b := New()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			session := agentrun.Session{
+				Prompt:  "hi",
+				Options: map[string]string{agentrun.OptionEffort: tt.effort},
+			}
+			_, args := b.SpawnArgs(session)
+			if tt.wantFlag != "" {
+				assertContains(t, args, "--variant")
+				assertContains(t, args, tt.wantFlag)
+			} else {
+				assertNotContains(t, args, "--variant")
+			}
+		})
+	}
+}
+
+func TestSpawnArgs_Effort_PrecedenceOverVariant(t *testing.T) {
+	b := New()
+	session := agentrun.Session{
+		Prompt: "hi",
+		Options: map[string]string{
+			agentrun.OptionEffort: "high",
+			OptionVariant:         string(VariantMax),
+		},
+	}
+	_, args := b.SpawnArgs(session)
+	// Effort high → --variant high, not max.
+	assertContains(t, args, "--variant")
+	assertContains(t, args, "high")
+	assertNotContains(t, args, "max")
+}
+
+func TestSpawnArgs_Effort_Medium_FallsThrough(t *testing.T) {
+	b := New()
+	session := agentrun.Session{
+		Prompt: "hi",
+		Options: map[string]string{
+			agentrun.OptionEffort: "medium",
+			OptionVariant:         string(VariantHigh),
+		},
+	}
+	_, args := b.SpawnArgs(session)
+	// medium has no OpenCode equivalent → falls through to OptionVariant.
+	assertContains(t, args, "--variant")
+	assertContains(t, args, "high")
+}
+
+func TestResumeArgs_Effort(t *testing.T) {
+	tests := []struct {
+		name     string
+		effort   string
+		wantFlag string
+	}{
+		{"low", "low", "low"},
+		{"high", "high", "high"},
+		{"max", "max", "max"},
+		{"medium_no_variant", "medium", ""},
+		{"empty", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := New()
+			sid := testSessionID
+			b.sessionID.CompareAndSwap(nil, &sid)
+
+			session := agentrun.Session{
+				Options: map[string]string{agentrun.OptionEffort: tt.effort},
+			}
+			_, args, err := b.ResumeArgs(session, "msg")
+			if err != nil {
+				t.Fatalf("ResumeArgs: %v", err)
+			}
+			if tt.wantFlag != "" {
+				assertContains(t, args, "--variant")
+				assertContains(t, args, tt.wantFlag)
+			} else {
+				assertNotContains(t, args, "--variant")
+			}
+		})
+	}
+}
+
+func TestResumeArgs_Effort_MediumFallsThrough(t *testing.T) {
+	b := New()
+	sid := testSessionID
+	b.sessionID.CompareAndSwap(nil, &sid)
+
+	session := agentrun.Session{
+		Options: map[string]string{
+			agentrun.OptionEffort: "medium",
+			OptionVariant:         string(VariantHigh),
+		},
+	}
+	_, args, err := b.ResumeArgs(session, "msg")
+	if err != nil {
+		t.Fatalf("ResumeArgs: %v", err)
+	}
+	// medium has no mapping → falls through to OptionVariant.
+	assertContains(t, args, "--variant")
+	assertContains(t, args, "high")
+}
+
+func TestSpawnArgs_Variant_FallbackWhenNoEffort(t *testing.T) {
+	b := New()
+	session := agentrun.Session{
+		Prompt:  "hi",
+		Options: map[string]string{OptionVariant: string(VariantHigh)},
+	}
+	_, args := b.SpawnArgs(session)
+	assertContains(t, args, "--variant")
+	assertContains(t, args, "high")
+}
+
 func assertContains(t *testing.T, args []string, want string) {
 	t.Helper()
 	for _, a := range args {

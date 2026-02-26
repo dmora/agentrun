@@ -888,6 +888,171 @@ func assertSeparatorBefore(t *testing.T, args []string, positional string) {
 	}
 }
 
+// --- Effort option tests ---
+
+func TestSpawnArgs_Effort(t *testing.T) {
+	tests := []struct {
+		name     string
+		effort   string
+		contains string
+	}{
+		{"low", "low", "model_reasoning_effort=low"},
+		{"medium", "medium", "model_reasoning_effort=medium"},
+		{"high", "high", "model_reasoning_effort=high"},
+		{"max_to_xhigh", "max", "model_reasoning_effort=xhigh"},
+	}
+
+	b := New()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			session := agentrun.Session{
+				Prompt:  "test",
+				Options: map[string]string{agentrun.OptionEffort: tt.effort},
+			}
+			_, args := b.SpawnArgs(session)
+			joined := strings.Join(args, " ")
+			if !strings.Contains(joined, tt.contains) {
+				t.Errorf("args missing %q in: %v", tt.contains, args)
+			}
+		})
+	}
+}
+
+func TestSpawnArgs_Effort_Skipped(t *testing.T) {
+	tests := []struct {
+		name   string
+		effort string
+	}{
+		{"empty", ""},
+		{"invalid", "xhigh"},
+	}
+
+	b := New()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			session := agentrun.Session{
+				Prompt:  "test",
+				Options: map[string]string{agentrun.OptionEffort: tt.effort},
+			}
+			_, args := b.SpawnArgs(session)
+			joined := strings.Join(args, " ")
+			if strings.Contains(joined, "model_reasoning_effort") {
+				t.Errorf("effort flag should be skipped: %v", args)
+			}
+		})
+	}
+}
+
+func TestResumeArgs_Effort(t *testing.T) {
+	b := New()
+	b.threadID.Store(&[]string{testThreadID}[0])
+
+	session := agentrun.Session{
+		Options: map[string]string{
+			agentrun.OptionResumeID: testThreadID,
+			agentrun.OptionEffort:   "high",
+		},
+	}
+	_, args, err := b.ResumeArgs(session, "test")
+	if err != nil {
+		t.Fatalf("ResumeArgs: %v", err)
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "model_reasoning_effort=high") {
+		t.Errorf("args missing effort: %v", args)
+	}
+}
+
+func TestResumeArgs_Effort_Invalid(t *testing.T) {
+	b := New()
+	b.threadID.Store(&[]string{testThreadID}[0])
+
+	session := agentrun.Session{
+		Options: map[string]string{
+			agentrun.OptionResumeID: testThreadID,
+			agentrun.OptionEffort:   "xhigh",
+		},
+	}
+	_, _, err := b.ResumeArgs(session, "test")
+	if err == nil {
+		t.Fatal("expected error for invalid effort")
+	}
+	if !strings.Contains(err.Error(), "unknown effort") {
+		t.Errorf("error should mention unknown effort: %v", err)
+	}
+}
+
+// --- AddDirs option tests ---
+
+func TestSpawnArgs_AddDirs(t *testing.T) {
+	tests := []struct {
+		name     string
+		addDirs  string
+		contains []string
+		excludes []string
+	}{
+		{"single", "/foo/bar", []string{"--add-dir", "/foo/bar"}, nil},
+		{"multiple", "/foo\n/bar", []string{"--add-dir", "/foo", "--add-dir", "/bar"}, nil},
+		{"skip_relative", "relative/path", nil, []string{"--add-dir"}},
+		{"skip_leading_dash", "-/foo", nil, []string{"--add-dir"}},
+		{"empty", "", nil, []string{"--add-dir"}},
+	}
+
+	b := New()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			session := agentrun.Session{
+				Prompt:  "test",
+				Options: map[string]string{agentrun.OptionAddDirs: tt.addDirs},
+			}
+			_, args := b.SpawnArgs(session)
+			joined := strings.Join(args, " ")
+			for _, c := range tt.contains {
+				if !strings.Contains(joined, c) {
+					t.Errorf("args missing %q in: %v", c, args)
+				}
+			}
+			for _, e := range tt.excludes {
+				if strings.Contains(joined, e) {
+					t.Errorf("args should not contain %q: %v", e, args)
+				}
+			}
+		})
+	}
+}
+
+func TestResumeArgs_AddDirs(t *testing.T) {
+	b := New()
+	b.threadID.Store(&[]string{testThreadID}[0])
+
+	tests := []struct {
+		name     string
+		addDirs  string
+		contains []string
+		excludes []string
+	}{
+		{"single", "/foo/bar", []string{"--add-dir", "/foo/bar"}, nil},
+		{"skip_relative", "relative/path", nil, []string{"--add-dir"}},
+		{"skip_leading_dash", "-/foo", nil, []string{"--add-dir"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			session := agentrun.Session{
+				Options: map[string]string{
+					agentrun.OptionResumeID: testThreadID,
+					agentrun.OptionAddDirs:  tt.addDirs,
+				},
+			}
+			_, args, err := b.ResumeArgs(session, "test")
+			if err != nil {
+				t.Fatalf("ResumeArgs: %v", err)
+			}
+			assertArgsContainsExcludes(t, args, tt.contains, tt.excludes)
+		})
+	}
+}
+
 func indexOf(args []string, target string) int {
 	for i, a := range args {
 		if a == target {
@@ -895,6 +1060,21 @@ func indexOf(args []string, target string) int {
 		}
 	}
 	return -1
+}
+
+func assertArgsContainsExcludes(t *testing.T, args, contains, excludes []string) {
+	t.Helper()
+	joined := strings.Join(args, " ")
+	for _, c := range contains {
+		if !strings.Contains(joined, c) {
+			t.Errorf("args missing %q in: %v", c, args)
+		}
+	}
+	for _, e := range excludes {
+		if strings.Contains(joined, e) {
+			t.Errorf("args should not contain %q: %v", e, args)
+		}
+	}
 }
 
 func assertStringContains(t *testing.T, s, substr string) {
