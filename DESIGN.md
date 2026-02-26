@@ -21,7 +21,7 @@ The root package (`agentrun`) defines the **language** — the shared concepts t
 | Input vocabulary | `Option*` constants | Flag/API mapping |
 | Config (structural) | `Session.Model`, `Session.Prompt` | — |
 | Config (cross-cutting) | `OptionSystemPrompt`, `OptionMaxTurns` | `--system-prompt`, `--max-turns` |
-| Config (backend-specific) | — | `OptionPermissionMode`, `OptionResumeID` |
+| Config (backend-specific) | — | `OptionPermissionMode` |
 
 ### Why Option Keys are Vocabulary
 
@@ -44,7 +44,7 @@ The root package (`agentrun`) defines the **language** — the shared concepts t
 | `OptionMaxTurns` | Yes — any agentic loop has a budget | `agentrun` | Universal loop control |
 | `OptionThinkingBudget` | Yes — any reasoning model | `agentrun` | Universal reasoning control |
 | `OptionPermissionMode` | No — Claude CLI sandboxing | `claude` | Claude-specific subprocess security |
-| `OptionResumeID` | No — Claude conversation ID | `claude` | Claude-specific session resumption |
+| `OptionResumeID` | Yes — any session can resume | `agentrun` | Universal session resumption |
 | `MessageText` | Yes — every agent produces text | `agentrun` | Universal output type |
 | `MessageThinkingDelta` | Yes — any streaming reasoning model | `agentrun` | Universal streaming output |
 | `OptionMode` | Yes — every tool has plan vs act | `agentrun` | Universal session intent |

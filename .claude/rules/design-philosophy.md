@@ -25,7 +25,7 @@ When adding or modifying constants, types, or options, apply this decision rule:
 
 **Backend (dialect):**
 - Wire format mapping (CLI flags, API bodies)
-- Backend-specific options (`OptionPermissionMode`, `OptionResumeID`)
+- Backend-specific options (`OptionPermissionMode`)
 - Backend-specific permission/mode constants
 
 ## Anti-Patterns
