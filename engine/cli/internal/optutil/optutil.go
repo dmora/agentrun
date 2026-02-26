@@ -3,6 +3,8 @@ package optutil
 
 import (
 	"fmt"
+	"path/filepath"
+	"strings"
 
 	"github.com/dmora/agentrun"
 )
@@ -24,4 +26,25 @@ func ValidateModeHITL(prefix string, opts map[string]string) error {
 		return fmt.Errorf("%s: unknown hitl %q: valid: on, off", prefix, hitl)
 	}
 	return nil
+}
+
+// ValidateEffort checks that OptionEffort, if present, is a recognized value.
+// The prefix is used in error messages (e.g., "claude", "codex").
+func ValidateEffort(prefix string, opts map[string]string) error {
+	if e := agentrun.Effort(opts[agentrun.OptionEffort]); e != "" && !e.Valid() {
+		return fmt.Errorf("%s: unknown effort %q: valid: low, medium, high, max", prefix, e)
+	}
+	return nil
+}
+
+// AppendAddDirs appends --add-dir (or the given flagName) for each valid
+// entry in OptionAddDirs. Entries must be absolute paths without leading
+// dashes. Invalid entries are silently skipped.
+func AppendAddDirs(args []string, opts map[string]string, flagName string) []string {
+	for _, dir := range agentrun.ParseListOption(opts, agentrun.OptionAddDirs) {
+		if filepath.IsAbs(dir) && !strings.HasPrefix(dir, "-") {
+			args = append(args, flagName, dir)
+		}
+	}
+	return args
 }

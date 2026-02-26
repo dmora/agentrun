@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 
 	"github.com/dmora/agentrun"
+	"github.com/dmora/agentrun/engine/cli/internal/optutil"
 )
 
 // Engine is a CLI subprocess engine that adapts a Backend into an agentrun.Engine.
@@ -80,8 +81,8 @@ func (e *Engine) Start(_ context.Context, session agentrun.Session, opts ...agen
 	}
 
 	// Validate cross-cutting options early (before SpawnArgs/StreamArgs).
-	if e := agentrun.Effort(session.Options[agentrun.OptionEffort]); e != "" && !e.Valid() {
-		return nil, fmt.Errorf("cli: unknown effort %q: valid: low, medium, high, max", e)
+	if err := optutil.ValidateEffort("cli", session.Options); err != nil {
+		return nil, err
 	}
 
 	// Resolve capabilities once.

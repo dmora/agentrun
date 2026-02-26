@@ -3,7 +3,6 @@ package codex
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 
@@ -242,11 +241,7 @@ func appendCommonArgs(args []string, session agentrun.Session) []string {
 	}
 
 	// Additional directories.
-	for _, dir := range agentrun.ParseListOption(session.Options, agentrun.OptionAddDirs) {
-		if filepath.IsAbs(dir) && !strings.HasPrefix(dir, "-") {
-			args = append(args, "--add-dir", dir)
-		}
-	}
+	args = optutil.AppendAddDirs(args, session.Options, "--add-dir")
 
 	return args
 }
@@ -346,10 +341,7 @@ func validateSessionOptions(opts map[string]string) error {
 	if err := validateSandboxIfNoRoot(opts); err != nil {
 		return err
 	}
-	if e := agentrun.Effort(opts[agentrun.OptionEffort]); e != "" && !e.Valid() {
-		return fmt.Errorf("codex: unknown effort %q: valid: low, medium, high, max", e)
-	}
-	return nil
+	return optutil.ValidateEffort("codex", opts)
 }
 
 // validateSandboxIfNoRoot validates OptionSandbox only when root options
