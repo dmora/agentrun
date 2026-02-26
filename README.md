@@ -147,7 +147,7 @@ make check    # fast iteration (lint + test)
 Custom backend authors can verify their implementation against shared safety and correctness contracts using the [compliance suite](enginetest/clitest):
 
 ```go
-clitest.RunBackendTests(t, func() cli.Backend { return mybackend.New() })
+clitest.RunBackendTests(t, func() cli.Backend { return &myBackend{} })
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines and design decisions.
