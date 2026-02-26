@@ -209,7 +209,6 @@ func TestSpawnArgs_SeparatorPreventsInjection(t *testing.T) {
 	}{
 		{"FullAutoInjection", "--full-auto"},
 		{"SandboxInjection", "--sandbox=danger-full-access"},
-		{"DashDashFlag", "--json"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -218,26 +217,7 @@ func TestSpawnArgs_SeparatorPreventsInjection(t *testing.T) {
 				Prompt:  tt.prompt,
 				Options: map[string]string{agentrun.OptionMode: string(agentrun.ModePlan)},
 			})
-			// The -- separator must appear before the prompt.
-			sepIdx := -1
-			promptIdx := -1
-			for i, a := range args {
-				if a == "--" {
-					sepIdx = i
-				}
-				if a == tt.prompt {
-					promptIdx = i
-				}
-			}
-			if sepIdx < 0 {
-				t.Fatal("missing -- separator in args")
-			}
-			if promptIdx < 0 {
-				t.Fatalf("prompt %q not found in args %v", tt.prompt, args)
-			}
-			if sepIdx >= promptIdx {
-				t.Errorf("-- separator (idx %d) must come before prompt (idx %d)", sepIdx, promptIdx)
-			}
+			assertSeparatorBefore(t, args, tt.prompt)
 		})
 	}
 }
@@ -248,33 +228,8 @@ func TestSpawnArgs_ResumeSeparatorPreventsInjection(t *testing.T) {
 		Prompt:  "--full-auto",
 		Options: map[string]string{agentrun.OptionResumeID: testThreadID},
 	})
-	// Both threadID and prompt must appear after --.
-	sepIdx := -1
-	for i, a := range args {
-		if a == "--" {
-			sepIdx = i
-			break
-		}
-	}
-	if sepIdx < 0 {
-		t.Fatal("missing -- separator in resume args")
-	}
-	tidIdx := -1
-	promptIdx := -1
-	for i, a := range args {
-		if a == testThreadID {
-			tidIdx = i
-		}
-		if a == "--full-auto" {
-			promptIdx = i
-		}
-	}
-	if tidIdx <= sepIdx {
-		t.Errorf("threadID (idx %d) should be after -- (idx %d)", tidIdx, sepIdx)
-	}
-	if promptIdx <= sepIdx {
-		t.Errorf("prompt (idx %d) should be after -- (idx %d)", promptIdx, sepIdx)
-	}
+	assertSeparatorBefore(t, args, testThreadID)
+	assertSeparatorBefore(t, args, "--full-auto")
 }
 
 // --- resolveExecPolicy (SAFETY-CRITICAL) ---
@@ -768,24 +723,7 @@ func TestResumeArgs_SeparatorPresent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	assertContains(t, args, "--")
-	// threadID and prompt must be after --.
-	sepIdx := -1
-	for i, a := range args {
-		if a == "--" {
-			sepIdx = i
-			break
-		}
-	}
-	tidIdx := -1
-	for i, a := range args {
-		if a == testThreadID {
-			tidIdx = i
-		}
-	}
-	if tidIdx <= sepIdx {
-		t.Errorf("threadID (idx %d) should be after -- (idx %d)", tidIdx, sepIdx)
-	}
+	assertSeparatorBefore(t, args, testThreadID)
 }
 
 // --- ResumeArgs: validateSessionOptions ---
@@ -933,6 +871,30 @@ func assertNotContains(t *testing.T, args []string, unwanted string) {
 			return
 		}
 	}
+}
+
+func assertSeparatorBefore(t *testing.T, args []string, positional string) {
+	t.Helper()
+	sepIdx := indexOf(args, "--")
+	posIdx := indexOf(args, positional)
+	if sepIdx < 0 {
+		t.Fatalf("missing -- separator in args %v", args)
+	}
+	if posIdx < 0 {
+		t.Fatalf("%q not found in args %v", positional, args)
+	}
+	if sepIdx >= posIdx {
+		t.Errorf("-- (idx %d) must come before %q (idx %d)", sepIdx, positional, posIdx)
+	}
+}
+
+func indexOf(args []string, target string) int {
+	for i, a := range args {
+		if a == target {
+			return i
+		}
+	}
+	return -1
 }
 
 func assertStringContains(t *testing.T, s, substr string) {

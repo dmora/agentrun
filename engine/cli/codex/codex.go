@@ -212,8 +212,8 @@ func buildResumeCommand(threadID string, session agentrun.Session) []string {
 
 // appendCommonArgs appends flags available on both exec and exec resume.
 func appendCommonArgs(args []string, session agentrun.Session) []string {
-	if session.Model != "" && !jsonutil.ContainsNull(session.Model) {
-		args = append(args, "-m", session.Model)
+	if m := session.Model; m != "" && !jsonutil.ContainsNull(m) && !strings.HasPrefix(m, "-") {
+		args = append(args, "-m", m)
 	}
 
 	if session.Options[OptionEphemeral] != "" {
@@ -229,7 +229,7 @@ func appendCommonArgs(args []string, session agentrun.Session) []string {
 
 // appendExecOnlyArgs appends flags only available on first-turn exec (not resume).
 func appendExecOnlyArgs(args []string, session agentrun.Session) []string {
-	if p := session.Options[OptionProfile]; p != "" && !jsonutil.ContainsNull(p) {
+	if p := session.Options[OptionProfile]; p != "" && !jsonutil.ContainsNull(p) && !strings.HasPrefix(p, "-") {
 		args = append(args, "-p", p)
 	}
 
