@@ -85,7 +85,7 @@ agentrun (interfaces)
 | `filter` | Composable channel middleware for message streams (Completed, Filter, ResultOnly, IsDelta) |
 | `engine/cli` | CLI subprocess engine: Backend→Engine adapter, process lifecycle, signal handling |
 | `engine/cli/claude` | Claude Code backend (all 5 cli interfaces: Spawner, Parser, Resumer, Streamer, InputFormatter) |
-| `engine/cli/opencode` | OpenCode backend (stub) |
+| `engine/cli/opencode` | OpenCode backend (Spawner, Parser, Resumer) |
 | `engine/acp` | ACP engine: JSON-RPC 2.0 persistent subprocess, multi-turn without MCP cold boot |
 | `engine/api/adk` | Google ADK API engine |
 | `enginetest` | Shared compliance test suites (RunSpawnerTests, etc.) |
@@ -102,3 +102,6 @@ agentrun (interfaces)
 - **Platform build constraints**: Engine implementations using OS-specific features (signals, process groups) use `//go:build !windows` on implementation files. Interface and option files remain platform-agnostic.
 - **Signal safety**: All process Signal/Kill calls use `signalProcess()` helper which handles `os.ErrProcessDone` — prevents errors on already-exited processes
 - **Cross-cutting session controls**: `Mode` (plan/act) and `HITL` (on/off) types live in root with `Valid()` methods. Root options and backend-specific options (e.g., `claude.OptionPermissionMode`) are independent control surfaces — root wins when set, backend used when absent. See `resolvePermissionFlag()` in Claude backend.
+- **Option parse helpers**: `ParsePositiveIntOption`, `ParseBoolOption`, `StringOption` in `session_options.go` — backends use these instead of scattered `strconv` parsing. Both typed parsers validate null bytes and return `(value, ok, error)`.
+- **RunTurn helper**: `runturn.go` encapsulates concurrent Send+drain pattern. Callers must provide a context with deadline/timeout. Safe for all engine types.
+- **Shared test infrastructure**: `testutil_test.go` contains `mockProcess` — shared across root-package test files.
