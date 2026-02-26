@@ -144,8 +144,8 @@ func TestMessageJSON_Full(t *testing.T) {
 			Input: json.RawMessage(`{"path":"foo.go"}`),
 		},
 		Usage:     &Usage{InputTokens: 100, OutputTokens: 50},
+		ResumeID:  "ses_abc123",
 		Raw:       json.RawMessage(`{"raw":true}`),
-		RawLine:   "original line",
 		Timestamp: ts,
 	}
 
@@ -171,8 +171,8 @@ func TestMessageJSON_Full(t *testing.T) {
 	if got.Usage == nil || got.Usage.InputTokens != 100 || got.Usage.OutputTokens != 50 {
 		t.Errorf("Usage: want {100,50}, got %v", got.Usage)
 	}
-	if got.RawLine != "original line" {
-		t.Errorf("RawLine: want 'original line', got %q", got.RawLine)
+	if got.ResumeID != "ses_abc123" {
+		t.Errorf("ResumeID: want 'ses_abc123', got %q", got.ResumeID)
 	}
 	if !got.Timestamp.Equal(ts) {
 		t.Errorf("Timestamp: want %v, got %v", ts, got.Timestamp)
@@ -197,7 +197,7 @@ func TestMessageJSON_Minimal(t *testing.T) {
 		t.Error("type field should be present")
 	}
 	// Timestamp is always present (time.Time is not omitempty-compatible).
-	for _, key := range []string{"content", "tool", "usage", "raw", "raw_line"} {
+	for _, key := range []string{"content", "tool", "usage", "resume_id", "raw"} {
 		if _, ok := raw[key]; ok {
 			t.Errorf("field %q should be omitted on minimal message", key)
 		}
@@ -236,12 +236,14 @@ func TestHITLValid(t *testing.T) {
 
 func TestSessionJSON_RoundTrip(t *testing.T) {
 	s := Session{
-		ID:      "s1",
-		AgentID: "agent-1",
-		CWD:     "/tmp",
-		Model:   "claude",
-		Prompt:  "greet me",
-		Options: map[string]string{"mode": "auto"},
+		ID:     "s1",
+		CWD:    "/tmp",
+		Model:  "claude",
+		Prompt: "greet me",
+		Options: map[string]string{
+			"mode":        "auto",
+			OptionAgentID: "agent-1",
+		},
 	}
 
 	data, err := json.Marshal(s)
@@ -254,11 +256,14 @@ func TestSessionJSON_RoundTrip(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	if got.ID != s.ID || got.AgentID != s.AgentID || got.CWD != s.CWD {
+	if got.ID != s.ID || got.CWD != s.CWD {
 		t.Errorf("identity fields mismatch: got %+v", got)
 	}
 	if got.Options["mode"] != "auto" {
 		t.Errorf("Options[mode]: want auto, got %q", got.Options["mode"])
+	}
+	if got.Options[OptionAgentID] != "agent-1" {
+		t.Errorf("Options[OptionAgentID]: want agent-1, got %q", got.Options[OptionAgentID])
 	}
 }
 

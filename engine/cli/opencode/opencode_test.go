@@ -52,9 +52,12 @@ func TestSpawnArgs(t *testing.T) {
 			want:    []string{"run", "--format", "json", "--model", "anthropic/claude-sonnet", "hi"},
 		},
 		{
-			name:    "WithAgent",
-			session: agentrun.Session{Prompt: "hi", AgentID: "coder"},
-			want:    []string{"run", "--format", "json", "--agent", "coder", "hi"},
+			name: "WithAgent",
+			session: agentrun.Session{
+				Prompt:  "hi",
+				Options: map[string]string{agentrun.OptionAgentID: "coder"},
+			},
+			want: []string{"run", "--format", "json", "--agent", "coder", "hi"},
 		},
 		{
 			name: "WithThinking",
@@ -81,9 +84,13 @@ func TestSpawnArgs(t *testing.T) {
 			want: []string{"run", "--format", "json", "--title", "my session", "hi"},
 		},
 		{
-			name:    "PromptAlwaysLast",
-			session: agentrun.Session{Prompt: "the prompt", Model: "m", AgentID: "a"},
-			want:    []string{"run", "--format", "json", "--model", "m", "--agent", "a", "the prompt"},
+			name: "PromptAlwaysLast",
+			session: agentrun.Session{
+				Prompt:  "the prompt",
+				Model:   "m",
+				Options: map[string]string{agentrun.OptionAgentID: "a"},
+			},
+			want: []string{"run", "--format", "json", "--model", "m", "--agent", "a", "the prompt"},
 		},
 	}
 	for _, tt := range tests {
@@ -161,7 +168,10 @@ func TestSpawnArgs_NullByteModel(t *testing.T) {
 
 func TestSpawnArgs_NullByteAgentID(t *testing.T) {
 	b := New()
-	_, args := b.SpawnArgs(agentrun.Session{Prompt: "hi", AgentID: "bad\x00agent"})
+	_, args := b.SpawnArgs(agentrun.Session{
+		Prompt:  "hi",
+		Options: map[string]string{agentrun.OptionAgentID: "bad\x00agent"},
+	})
 	for _, a := range args {
 		if a == "--agent" {
 			t.Error("--agent should be omitted for null-byte agent ID")

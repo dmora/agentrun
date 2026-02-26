@@ -89,7 +89,6 @@ The following feedback was captured during architecture review and should be add
 - `Process.Send()` may need to distinguish streaming vs resume-per-turn models (consider Sendable type-assertion or split) — #63
 - Server restart resilience requires a Recoverer interface for HandleInit/ParseInit duality — #64
 - Session may need TransportHint/StreamingMode for turn-boundary detection — #63
-- Message should include a RawLine field for crash-recovery log pipeline — #63
 - Backend self-registration pattern prevents reverse-engineering wiring — #65-67
 - HIPAA requires structured subprocess event logging (SessionEvent audit callback) — #63
 - CWD path validation (ValidateProjectPath) should be exported from parent — #65

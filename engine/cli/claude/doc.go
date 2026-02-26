@@ -62,7 +62,7 @@
 //
 //   - [agentrun.OptionResumeID] — backend-agnostic session ID for resume.
 //     StreamArgs adds --resume when set and valid. ResumeArgs reads from
-//     the same key. Consumers capture the ID from MessageInit.Content.
+//     the same key. Consumers capture the ID from MessageInit.ResumeID.
 //
 // Claude-specific options:
 //

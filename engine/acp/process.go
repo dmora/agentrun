@@ -324,7 +324,7 @@ func (p *process) handshake(ctx context.Context, session agentrun.Session) error
 	// Step 3: Emit MessageInit (before config application — consumers need session ID).
 	p.emit(agentrun.Message{
 		Type:      agentrun.MessageInit,
-		Content:   p.sessionID,
+		ResumeID:  p.sessionID,
 		Timestamp: time.Now(),
 	})
 

@@ -316,9 +316,6 @@ func (p *process) scanLines(ctx context.Context, stdout io.ReadCloser) error {
 		if msg.Timestamp.IsZero() {
 			msg.Timestamp = time.Now()
 		}
-		if msg.RawLine == "" {
-			msg.RawLine = line
-		}
 
 		select {
 		case p.output <- msg:

@@ -7,7 +7,7 @@
 // ACP uses a persistent JSON-RPC 2.0 subprocess — turns are instant after
 // the first MCP cold boot.
 //
-// Session resume: the session ID is captured from MessageInit.Content and
+// Session resume: the session ID is captured from MessageInit.ResumeID and
 // printed at session start. Pass --resume <id> to resume a saved session.
 //
 // Run via:

@@ -135,8 +135,8 @@ func TestEngine_Start_Handshake(t *testing.T) {
 	if msg.Type != agentrun.MessageInit {
 		t.Errorf("first message type = %q, want %q", msg.Type, agentrun.MessageInit)
 	}
-	if msg.Content == "" {
-		t.Error("MessageInit.Content (session ID) is empty")
+	if msg.ResumeID == "" {
+		t.Error("MessageInit.ResumeID (session ID) is empty")
 	}
 }
 
@@ -319,8 +319,8 @@ func TestEngine_ResumeID_SessionLoad(t *testing.T) {
 		t.Errorf("type = %q, want %q", msg.Type, agentrun.MessageInit)
 	}
 	// LoadSessionResult has no sessionId — uses resumeID directly.
-	if msg.Content != "existing-session-123" {
-		t.Errorf("session ID = %q, want %q", msg.Content, "existing-session-123")
+	if msg.ResumeID != "existing-session-123" {
+		t.Errorf("session ID = %q, want %q", msg.ResumeID, "existing-session-123")
 	}
 }
 
@@ -385,8 +385,8 @@ func TestEngine_CWDPassthrough(t *testing.T) {
 		t.Fatalf("type = %q, want %q", msg.Type, agentrun.MessageInit)
 	}
 	// Session ID should contain sanitized CWD.
-	if !strings.HasPrefix(msg.Content, "cwd-") {
-		t.Errorf("session ID = %q, want prefix %q", msg.Content, "cwd-")
+	if !strings.HasPrefix(msg.ResumeID, "cwd-") {
+		t.Errorf("session ID = %q, want prefix %q", msg.ResumeID, "cwd-")
 	}
 }
 

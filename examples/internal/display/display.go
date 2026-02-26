@@ -15,8 +15,8 @@ import (
 func PrintMessage(msg agentrun.Message) {
 	switch msg.Type {
 	case agentrun.MessageInit:
-		if msg.Content != "" {
-			fmt.Printf("[init]    session ID: %s\n", msg.Content)
+		if msg.ResumeID != "" {
+			fmt.Printf("[init]    session ID: %s\n", msg.ResumeID)
 		} else {
 			fmt.Println("[init]    (session started)")
 		}
@@ -46,12 +46,12 @@ func PrintRaw(msg agentrun.Message) {
 	if len(content) > 120 {
 		content = content[:120] + "..."
 	}
-	raw := msg.RawLine
-	if len(raw) > 200 {
-		raw = raw[:200] + "..."
-	}
 	fmt.Printf("[%s] %-18s %s\n", ts, msg.Type, content)
-	if raw != "" {
+	if len(msg.Raw) > 0 {
+		raw := string(msg.Raw)
+		if len(raw) > 200 {
+			raw = raw[:200] + "..."
+		}
 		fmt.Printf("           raw: %s\n", raw)
 	}
 }

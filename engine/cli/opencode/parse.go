@@ -82,7 +82,7 @@ func (b *Backend) parseStepStart(raw map[string]any, msg *agentrun.Message) {
 	if sid != "" && validateSessionID(sid) == nil {
 		if b.sessionID.CompareAndSwap(nil, &sid) {
 			msg.Type = agentrun.MessageInit
-			msg.Content = sid
+			msg.ResumeID = sid
 			return
 		}
 	}
