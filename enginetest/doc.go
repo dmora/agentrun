@@ -1,15 +1,7 @@
-// Package enginetest provides compliance test suites for agentrun Engine and
-// Backend implementations.
+// Package enginetest provides compliance test suites for agentrun implementations.
 //
-// Test authors call the exported Run*Tests functions (e.g., RunSpawnerTests,
-// RunParserTests) with a factory function that returns the implementation under
-// test. This ensures all backends satisfy the same behavioral contract.
+// CLI backend compliance tests live in the clitest sub-package.
+// Root-level Engine/Process compliance is planned for a future release.
 //
-// Example usage in a backend test file:
-//
-//	func TestClaudeBackend(t *testing.T) {
-//	    enginetest.RunSpawnerTests(t, func() cli.Spawner {
-//	        return claude.New()
-//	    })
-//	}
+// See enginetest/clitest for usage examples.
 package enginetest

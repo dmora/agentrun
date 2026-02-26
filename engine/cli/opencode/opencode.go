@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"sync/atomic"
 
 	"github.com/dmora/agentrun"
@@ -178,7 +179,7 @@ func baseArgs() []string {
 // Mode, HITL, SystemPrompt, and MaxTurns are silently ignored
 // (OpenCode has no CLI flags for these).
 func appendCommonArgs(args []string, session agentrun.Session) []string {
-	if session.Model != "" && !jsonutil.ContainsNull(session.Model) {
+	if session.Model != "" && !jsonutil.ContainsNull(session.Model) && !strings.HasPrefix(session.Model, "-") {
 		args = append(args, "--model", session.Model)
 	}
 

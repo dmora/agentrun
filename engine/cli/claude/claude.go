@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/dmora/agentrun"
 	"github.com/dmora/agentrun/engine/cli"
@@ -221,7 +222,7 @@ func appendPositiveInt(args []string, opts map[string]string, key, flag string) 
 // max-turns, and max-thinking-tokens flags based on session fields
 // and options. Invalid or null-byte-containing values are silently skipped.
 func appendSessionArgs(args []string, session agentrun.Session) []string {
-	if session.Model != "" && !jsonutil.ContainsNull(session.Model) {
+	if session.Model != "" && !jsonutil.ContainsNull(session.Model) && !strings.HasPrefix(session.Model, "-") {
 		args = append(args, "--model", session.Model)
 	}
 

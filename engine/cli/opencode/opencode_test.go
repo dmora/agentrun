@@ -166,6 +166,19 @@ func TestSpawnArgs_NullByteModel(t *testing.T) {
 	}
 }
 
+func TestSpawnArgs_ModelLeadingDash(t *testing.T) {
+	b := New()
+	_, args := b.SpawnArgs(agentrun.Session{Prompt: "hi", Model: "-evil"})
+	for _, a := range args {
+		if a == "--model" {
+			t.Error("--model should be omitted for leading-dash model")
+		}
+		if a == "-evil" {
+			t.Error("leading-dash model should not appear in args")
+		}
+	}
+}
+
 func TestSpawnArgs_NullByteAgentID(t *testing.T) {
 	b := New()
 	_, args := b.SpawnArgs(agentrun.Session{

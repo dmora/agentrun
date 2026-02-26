@@ -64,19 +64,28 @@ type CLIEngine struct {
 
 This approach is simpler, more readable, and avoids build-time code generation.
 
-### enginetest/ compliance suites
+### enginetest/clitest compliance suites
 
-Backend authors prove correctness by calling shared test functions:
+Backend authors prove correctness by calling `RunBackendTests` with a factory callback. The suite discovers optional capabilities (Resumer, Streamer, InputFormatter) via type assertion:
 
 ```go
-func TestMyBackend(t *testing.T) {
-    enginetest.RunSpawnerTests(t, func() cli.Spawner {
+package mybackend_test
+
+import (
+    "testing"
+    "github.com/dmora/agentrun/engine/cli"
+    "github.com/dmora/agentrun/engine/cli/mybackend"
+    "github.com/dmora/agentrun/enginetest/clitest"
+)
+
+func TestCompliance(t *testing.T) {
+    clitest.RunBackendTests(t, func() cli.Backend {
         return mybackend.New()
     })
 }
 ```
 
-The `Run*Tests` pattern (RunSpawnerTests, RunParserTests, etc.) ensures all backends satisfy the same behavioral contract.
+Individual `RunSpawnerTests`, `RunParserTests`, and `RunResumerTests` are also exported for backends with unusual needs.
 
 ### Zero external dependencies
 
@@ -95,4 +104,4 @@ The following feedback was captured during architecture review and should be add
 - Scanner buffer size should be configurable (dropped messages = patient safety issue) — #65
 - RecoverableEngine as optional interface keeps API engines clean — #63
 - CLIOptions typed struct prevents stringly-typed contract in Session.Options — #64
-- Subprocess test helpers (SIGTERM/SIGKILL lifecycle) belong in enginetest/ — #68
+- Subprocess test helpers (SIGTERM/SIGKILL lifecycle) could be added to enginetest as engine-level compliance suites
