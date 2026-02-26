@@ -50,9 +50,14 @@ func main() {
 ```
 agentrun (interfaces + value types)
 │
+├── filter/                  Composable channel middleware
+│
 ├── engine/cli/              CLI subprocess transport
 │   ├── claude/              Claude Code backend
+│   ├── codex/               Codex CLI backend
 │   └── opencode/            OpenCode backend
+│
+├── engine/acp/              ACP JSON-RPC 2.0 engine
 │
 ├── engine/api/
 │   └── adk/                 Google ADK API engine

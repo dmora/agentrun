@@ -22,5 +22,5 @@
 // or call [agentrun.Process.Stop] to release subprocess resources. Failing to
 // do so may leave the subprocess running and leak goroutines.
 //
-// Concrete backends (claude, opencode) implement the Backend interface.
+// Concrete backends (claude, codex, opencode) implement the Backend interface.
 package cli
