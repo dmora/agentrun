@@ -10,6 +10,7 @@ import (
 
 	"github.com/dmora/agentrun"
 	"github.com/dmora/agentrun/engine/cli"
+	"github.com/dmora/agentrun/engine/cli/internal/errfmt"
 )
 
 const testValidSessionID = "ses_abcdefghij1234567890"
@@ -317,33 +318,14 @@ func TestParseLine_Error_FallbackMessage(t *testing.T) {
 
 func TestParseLine_Error_LongMessage(t *testing.T) {
 	b := New()
-	longMsg := strings.Repeat("x", maxErrorLen+500)
+	longMsg := strings.Repeat("x", errfmt.MaxLen+500)
 	line := `{"type":"error","timestamp":1700000000000,"error":{"name":"E","message":"` + longMsg + `"}}`
 	msg, err := b.ParseLine(line)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(msg.Content) > maxErrorLen {
-		t.Errorf("Content length = %d, want <= %d", len(msg.Content), maxErrorLen)
-	}
-}
-
-func TestFormatError_UTF8Truncation(t *testing.T) {
-	// Build a string that places a multi-byte rune at the maxErrorLen boundary.
-	// U+1F600 (😀) is 4 bytes in UTF-8.
-	prefix := strings.Repeat("x", maxErrorLen-2) // 2 bytes short of limit
-	// Adding a 4-byte rune crosses the boundary — truncation must not split it.
-	input := prefix + "😀"
-	result := formatError("", input)
-	if len(result) > maxErrorLen {
-		t.Errorf("len(result) = %d, want <= %d", len(result), maxErrorLen)
-	}
-	// The result must be valid UTF-8.
-	for i, r := range result {
-		if r == '\uFFFD' {
-			t.Errorf("invalid UTF-8 at byte %d (replacement character found)", i)
-			break
-		}
+	if len(msg.Content) > errfmt.MaxLen {
+		t.Errorf("Content length = %d, want <= %d", len(msg.Content), errfmt.MaxLen)
 	}
 }
 

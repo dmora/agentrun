@@ -1,9 +1,9 @@
 //go:build !windows
 
 // Command interactive demonstrates multi-turn conversations with agentrun.
-// It supports Claude, OpenCode, and ACP backends via the --backend flag.
+// It supports Claude, OpenCode, Codex, and ACP backends via the --backend flag.
 //
-// Claude uses streaming stdin; OpenCode uses spawn-per-turn with --session.
+// Claude uses streaming stdin; OpenCode and Codex use spawn-per-turn.
 // ACP uses a persistent JSON-RPC 2.0 subprocess — turns are instant after
 // the first MCP cold boot.
 //
@@ -14,6 +14,7 @@
 //
 //	cd examples && go run ./interactive/ --backend claude
 //	cd examples && go run ./interactive/ --backend opencode
+//	cd examples && go run ./interactive/ --backend codex
 //	cd examples && go run ./interactive/ --backend acp
 //	cd examples && go run ./interactive/ --backend acp --binary gemini
 //	cd examples && go run ./interactive/ --backend acp --binary goose
@@ -37,6 +38,7 @@ import (
 	"github.com/dmora/agentrun/engine/acp"
 	"github.com/dmora/agentrun/engine/cli"
 	"github.com/dmora/agentrun/engine/cli/claude"
+	"github.com/dmora/agentrun/engine/cli/codex"
 	"github.com/dmora/agentrun/engine/cli/opencode"
 	"github.com/dmora/agentrun/examples/internal/display"
 )
@@ -47,7 +49,7 @@ const (
 )
 
 func main() {
-	backendFlag := flag.String("backend", "claude", "backend to use: claude, opencode, or acp")
+	backendFlag := flag.String("backend", "claude", "backend to use: claude, opencode, codex, or acp")
 	binaryFlag := flag.String("binary", "", "ACP agent binary (used with --backend acp)")
 	argsFlag := flag.String("args", "", "comma-separated args for ACP binary (e.g. \"acp\" or \"--experimental-acp\")")
 	resumeFlag := flag.String("resume", "", "session ID to resume (from previous MessageInit)")
@@ -142,6 +144,8 @@ func makeEngine(name, binary, argsStr string) (agentrun.Engine, bool, error) {
 		return cli.NewEngine(claude.New()), false, nil
 	case backendOpenCode:
 		return cli.NewEngine(opencode.New()), true, nil
+	case "codex":
+		return cli.NewEngine(codex.New()), true, nil
 	case "acp":
 		if binary == "" {
 			binary = backendOpenCode
@@ -149,7 +153,7 @@ func makeEngine(name, binary, argsStr string) (agentrun.Engine, bool, error) {
 		args := acpArgs(binary, argsStr)
 		return acp.NewEngine(acp.WithBinary(binary), acp.WithArgs(args...)), false, nil
 	default:
-		return nil, false, fmt.Errorf("unknown backend %q (valid: claude, opencode, acp)", name)
+		return nil, false, fmt.Errorf("unknown backend %q (valid: claude, opencode, codex, acp)", name)
 	}
 }
 

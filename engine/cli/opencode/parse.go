@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/dmora/agentrun"
 	"github.com/dmora/agentrun/engine/cli"
+	"github.com/dmora/agentrun/engine/cli/internal/errfmt"
 	"github.com/dmora/agentrun/engine/cli/internal/jsonutil"
 )
 
@@ -163,7 +163,7 @@ func parseError(raw map[string]any, msg *agentrun.Message) {
 	if message == "" {
 		message = jsonutil.GetString(errObj, "message")
 	}
-	msg.Content = formatError(code, message)
+	msg.Content = errfmt.Format(code, message)
 }
 
 // parseTimestamp extracts a millisecond Unix timestamp from the "timestamp" field.
@@ -216,26 +216,4 @@ func marshalField(m map[string]any, key string) json.RawMessage {
 		return json.RawMessage(fmt.Sprintf(`"[marshal error: %v]"`, err))
 	}
 	return data
-}
-
-// maxErrorLen caps error content to prevent unbounded propagation.
-const maxErrorLen = 4096
-
-// formatError formats an error code and message pair.
-// Content is capped at maxErrorLen bytes, truncated at a valid UTF-8 boundary.
-func formatError(code, message string) string {
-	var content string
-	if code != "" {
-		content = code + ": " + message
-	} else {
-		content = message
-	}
-	if len(content) > maxErrorLen {
-		content = content[:maxErrorLen]
-		for !utf8.ValidString(content) {
-			content = content[:len(content)-1]
-		}
-		return content
-	}
-	return content
 }

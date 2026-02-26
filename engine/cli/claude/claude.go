@@ -10,6 +10,7 @@ import (
 	"github.com/dmora/agentrun"
 	"github.com/dmora/agentrun/engine/cli"
 	"github.com/dmora/agentrun/engine/cli/internal/jsonutil"
+	"github.com/dmora/agentrun/engine/cli/internal/optutil"
 )
 
 // Session option keys specific to the Claude CLI backend.
@@ -238,13 +239,6 @@ func appendSessionArgs(args []string, session agentrun.Session) []string {
 	return args
 }
 
-// rootOptionsSet reports whether either OptionMode or OptionHITL is present
-// in opts. When true, root options take precedence over backend-specific
-// OptionPermissionMode.
-func rootOptionsSet(opts map[string]string) bool {
-	return opts[agentrun.OptionMode] != "" || opts[agentrun.OptionHITL] != ""
-}
-
 // resolvePermissionFlag maps root-level OptionMode/OptionHITL and
 // backend-specific OptionPermissionMode to a --permission-mode value.
 // Root options and backend options are independent control surfaces:
@@ -260,7 +254,7 @@ func resolvePermissionFlag(opts map[string]string) (string, bool) {
 	hitl := agentrun.HITL(opts[agentrun.OptionHITL])
 
 	// Root options set — use them exclusively.
-	if rootOptionsSet(opts) {
+	if optutil.RootOptionsSet(opts) {
 		if mode == agentrun.ModePlan {
 			return "plan", true
 		}
@@ -321,7 +315,7 @@ func validateModeHITL(opts map[string]string) error {
 // validatePermissionIfNoRoot validates OptionPermissionMode only when root
 // options (OptionMode/OptionHITL) are absent — they are independent surfaces.
 func validatePermissionIfNoRoot(opts map[string]string) error {
-	if rootOptionsSet(opts) {
+	if optutil.RootOptionsSet(opts) {
 		return nil
 	}
 	perm := PermissionMode(opts[OptionPermissionMode])
