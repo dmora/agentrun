@@ -47,6 +47,26 @@ func assertToolCall(t *testing.T, msg *agentrun.Message, wantName string, wantIn
 	}
 }
 
+// assertUsageContextWindow checks Type, Usage.ContextSizeTokens, and Usage.ContextUsedTokens.
+func assertUsageContextWindow(t *testing.T, msg *agentrun.Message, wantSize, wantUsed int) {
+	t.Helper()
+	if msg == nil {
+		t.Fatal("expected non-nil message")
+	}
+	if msg.Type != agentrun.MessageContextWindow {
+		t.Errorf("type = %q, want %q", msg.Type, agentrun.MessageContextWindow)
+	}
+	if msg.Usage == nil {
+		t.Fatal("expected Usage, got nil")
+	}
+	if msg.Usage.ContextSizeTokens != wantSize {
+		t.Errorf("ContextSizeTokens = %d, want %d", msg.Usage.ContextSizeTokens, wantSize)
+	}
+	if msg.Usage.ContextUsedTokens != wantUsed {
+		t.Errorf("ContextUsedTokens = %d, want %d", msg.Usage.ContextUsedTokens, wantUsed)
+	}
+}
+
 func TestParseSessionUpdate_ContentChunks(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -165,11 +185,73 @@ func TestParseSessionUpdate_MetadataUpdates(t *testing.T) {
 }
 
 func TestParseSessionUpdate_UsageUpdate(t *testing.T) {
-	update := `{"sessionUpdate":"usage_update","size":200000,"used":45000}`
-	msg := parseSessionUpdate(json.RawMessage(update))
-	if msg != nil {
-		t.Errorf("expected nil for usage_update, got %+v", msg)
+	t.Run("normal", func(t *testing.T) {
+		update := `{"sessionUpdate":"usage_update","size":200000,"used":45000}`
+		msg := parseSessionUpdate(json.RawMessage(update))
+		assertUsageContextWindow(t, msg, 200000, 45000)
+		if msg.Timestamp.IsZero() {
+			t.Error("timestamp should be set")
+		}
+	})
+
+	t.Run("fresh_session", func(t *testing.T) {
+		update := `{"sessionUpdate":"usage_update","size":200000,"used":0}`
+		msg := parseSessionUpdate(json.RawMessage(update))
+		assertUsageContextWindow(t, msg, 200000, 0)
+	})
+
+	t.Run("no_cost", func(t *testing.T) {
+		// Wire format may include cost, but we intentionally drop it.
+		update := `{"sessionUpdate":"usage_update","size":200000,"used":45000,"cost":{"amount":0.05,"currency":"USD"}}`
+		msg := parseSessionUpdate(json.RawMessage(update))
+		assertUsageContextWindow(t, msg, 200000, 45000)
+		if msg.Usage.CostUSD != 0 {
+			t.Errorf("CostUSD = %f, want 0 (cost dropped from mid-turn)", msg.Usage.CostUSD)
+		}
+	})
+}
+
+// TestParseSessionUpdate_UsageUpdateNilCases tests inputs that should return nil
+// (sanitized to no capacity).
+func TestParseSessionUpdate_UsageUpdateNilCases(t *testing.T) {
+	tests := []struct {
+		name   string
+		update string
+	}{
+		{"zero_fields", `{"sessionUpdate":"usage_update","size":0,"used":0}`},
+		{"negative_values", `{"sessionUpdate":"usage_update","size":-1,"used":-5}`},
+		{"negative_size_positive_used", `{"sessionUpdate":"usage_update","size":-1,"used":5000}`},
+		{"size_zero_used_nonzero", `{"sessionUpdate":"usage_update","size":0,"used":45000}`},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := parseSessionUpdate(json.RawMessage(tt.update))
+			if msg != nil {
+				t.Errorf("expected nil, got %+v", msg)
+			}
+		})
+	}
+}
+
+// TestParseSessionUpdate_UsageUpdateEdgeCases tests clamping and error paths.
+func TestParseSessionUpdate_UsageUpdateEdgeCases(t *testing.T) {
+	t.Run("used_exceeds_size", func(t *testing.T) {
+		// used > size should be clamped to size.
+		update := `{"sessionUpdate":"usage_update","size":200000,"used":500000}`
+		msg := parseSessionUpdate(json.RawMessage(update))
+		assertUsageContextWindow(t, msg, 200000, 200000)
+	})
+
+	t.Run("malformed_json", func(t *testing.T) {
+		update := `{"sessionUpdate":"usage_update","size":"not_a_number"}`
+		msg := parseSessionUpdate(json.RawMessage(update))
+		if msg == nil {
+			t.Fatal("expected non-nil error message for malformed JSON")
+		}
+		if msg.Type != agentrun.MessageError {
+			t.Errorf("type = %q, want %q", msg.Type, agentrun.MessageError)
+		}
+	})
 }
 
 func TestParseSessionUpdate_Unknown(t *testing.T) {
@@ -256,13 +338,14 @@ func FuzzParseSessionUpdate(f *testing.F) {
 	f.Add([]byte(`{"sessionUpdate":"tool_call","toolCallId":"x","title":"y","rawInput":{}}`))
 	f.Add([]byte(`{"sessionUpdate":"tool_call_update","toolCallId":"x","status":"completed"}`))
 	f.Add([]byte(`{"sessionUpdate":"usage_update","size":1000,"used":500}`))
+	f.Add([]byte(`{"sessionUpdate":"usage_update","size":200000,"used":45000,"cost":{"amount":0.05,"currency":"USD"}}`))
 	f.Add([]byte(`{"sessionUpdate":"unknown_type"}`))
 	f.Add([]byte(`{}`))
 	f.Add([]byte(``))
 	f.Add([]byte(`not json`))
 
 	f.Fuzz(func(_ *testing.T, data []byte) {
-		// Should never panic — nil return is valid (usage_update).
+		// Should never panic — nil return is valid (e.g. zero size+used).
 		parseSessionUpdate(json.RawMessage(data))
 	})
 }

@@ -127,7 +127,7 @@ func TestCompleted_PassesNonDelta(t *testing.T) {
 		agentrun.MessageText, agentrun.MessageResult, agentrun.MessageError,
 		agentrun.MessageInit, agentrun.MessageSystem, agentrun.MessageEOF,
 		agentrun.MessageToolUse, agentrun.MessageToolResult,
-		agentrun.MessageThinking,
+		agentrun.MessageThinking, agentrun.MessageContextWindow,
 	}
 	in := make(chan agentrun.Message, len(nonDelta))
 	go func() {
@@ -170,13 +170,14 @@ func TestCompleted_EmptyInput(t *testing.T) {
 // --- ResultOnly tests ---
 
 func TestResultOnly_PassesOnlyResult(t *testing.T) {
-	in := make(chan agentrun.Message, 5)
+	in := make(chan agentrun.Message, 6)
 	go fill(in,
 		msg(agentrun.MessageTextDelta),
 		msg(agentrun.MessageText),
 		msg(agentrun.MessageError),
 		msg(agentrun.MessageResult),
 		msg(agentrun.MessageInit),
+		msg(agentrun.MessageContextWindow),
 	)
 
 	out := ResultOnly(context.Background(), in)
@@ -232,6 +233,7 @@ func TestIsDelta(t *testing.T) {
 		{agentrun.MessageToolUse, false},
 		{agentrun.MessageToolResult, false},
 		{agentrun.MessageThinking, false},
+		{agentrun.MessageContextWindow, false},
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.mt), func(t *testing.T) {

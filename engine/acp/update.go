@@ -28,7 +28,7 @@ import (
 const ErrCodeToolCallFailed = "tool_call_failed"
 
 // updateParser converts a raw session update into a Message.
-// Returns nil to indicate the update should be silently consumed (e.g. usage_update).
+// Returns nil to indicate the update should be silently consumed.
 type updateParser func(update json.RawMessage) *agentrun.Message
 
 // updateParsers dispatches ACP sessionUpdate discriminator values to their parser functions.
@@ -47,7 +47,7 @@ var updateParsers = map[string]updateParser{
 }
 
 // parseSessionUpdate maps an ACP session/update inner payload to an agentrun.Message.
-// Returns nil for updates that should be silently consumed (usage_update).
+// Returns nil for updates that should be silently consumed.
 // Unknown types produce a MessageSystem with the sessionUpdate value as content.
 func parseSessionUpdate(update json.RawMessage) *agentrun.Message {
 	if len(update) == 0 {
@@ -82,7 +82,7 @@ func parseSessionUpdate(update json.RawMessage) *agentrun.Message {
 	if parser, ok := updateParsers[header.SessionUpdate]; ok {
 		m := parser(update)
 		if m == nil {
-			return nil // silent consumption (e.g. usage_update)
+			return nil // silent consumption (parser returned nil)
 		}
 		if m.Timestamp.IsZero() {
 			m.Timestamp = time.Now()
@@ -279,16 +279,50 @@ func parseSessionInfoUpdate(update json.RawMessage) *agentrun.Message {
 	return &msg
 }
 
-// parseUsageUpdate silently consumes incremental context-window usage notifications.
+// parseUsageUpdate parses ACP usage_update notifications into MessageContextWindow.
+// Carries context window fill level (size/used) as mid-turn signals for orchestrators.
 //
-// Per-turn token usage (for cost tracking) is surfaced via handlePromptResult
-// (promptResult.Usage → Message.Usage on MessageResult). This function handles
-// a different signal: context window fill level (size/used), which is not yet
-// surfaced. Defer accumulation until an orchestrator use case requires it.
+// Per-turn token usage (InputTokens, OutputTokens) is surfaced separately
+// via handlePromptResult on MessageResult. This function handles a different signal:
+// context window capacity and fill level.
 //
-// See also: handlePromptResult in process.go (authoritative turn-level usage).
-func parseUsageUpdate(_ json.RawMessage) *agentrun.Message {
-	return nil
+// Returns nil when size is zero (no capacity → fill level is meaningless).
+// size > 0 with used == 0 is valid (fresh session).
+// used is clamped to size (defense against used > capacity).
+func parseUsageUpdate(update json.RawMessage) *agentrun.Message {
+	var d usageUpdate
+	if err := json.Unmarshal(update, &d); err != nil {
+		return unmarshalError("usage_update", err)
+	}
+
+	// Sanitize: negative values → 0 (defense against malformed subprocess data).
+	size := d.Size
+	if size < 0 {
+		size = 0
+	}
+	used := d.Used
+	if used < 0 {
+		used = 0
+	}
+
+	// No capacity → fill level is meaningless.
+	if size == 0 {
+		return nil
+	}
+
+	// Clamp used to size (defense against used > capacity).
+	if used > size {
+		used = size
+	}
+
+	msg := agentrun.Message{
+		Type: agentrun.MessageContextWindow,
+		Usage: &agentrun.Usage{
+			ContextSizeTokens: size,
+			ContextUsedTokens: used,
+		},
+	}
+	return &msg
 }
 
 func parseAvailableCommandsUpdate(_ json.RawMessage) *agentrun.Message {

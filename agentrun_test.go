@@ -144,12 +144,14 @@ func TestMessageJSON_Full(t *testing.T) {
 			Input: json.RawMessage(`{"path":"foo.go"}`),
 		},
 		Usage: &Usage{
-			InputTokens:      100,
-			OutputTokens:     50,
-			CacheReadTokens:  25,
-			CacheWriteTokens: 10,
-			ThinkingTokens:   5,
-			CostUSD:          0.0042,
+			InputTokens:       100,
+			OutputTokens:      50,
+			CacheReadTokens:   25,
+			CacheWriteTokens:  10,
+			ThinkingTokens:    5,
+			CostUSD:           0.0042,
+			ContextSizeTokens: 200000,
+			ContextUsedTokens: 45000,
 		},
 		StopReason: StopEndTurn,
 		ErrorCode:  "rate_limit",
@@ -210,6 +212,12 @@ func TestMessageJSON_Full(t *testing.T) {
 		}
 		if got.Usage.CostUSD != 0.0042 {
 			t.Errorf("CostUSD: want 0.0042, got %f", got.Usage.CostUSD)
+		}
+		if got.Usage.ContextSizeTokens != 200000 {
+			t.Errorf("ContextSizeTokens: want 200000, got %d", got.Usage.ContextSizeTokens)
+		}
+		if got.Usage.ContextUsedTokens != 45000 {
+			t.Errorf("ContextUsedTokens: want 45000, got %d", got.Usage.ContextUsedTokens)
 		}
 	})
 }
@@ -509,7 +517,7 @@ func TestUsage_JSON_OmitemptyNewFields(t *testing.T) {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	for _, key := range []string{"cache_read_tokens", "cache_write_tokens", "thinking_tokens", "cost_usd"} {
+	for _, key := range []string{"cache_read_tokens", "cache_write_tokens", "thinking_tokens", "cost_usd", "context_size_tokens", "context_used_tokens"} {
 		if _, ok := raw[key]; ok {
 			t.Errorf("field %q should be omitted when zero", key)
 		}
@@ -524,12 +532,14 @@ func TestUsage_JSON_OmitemptyNewFields(t *testing.T) {
 
 func TestUsage_JSON_WithAllFields(t *testing.T) {
 	u := Usage{
-		InputTokens:      100,
-		OutputTokens:     50,
-		CacheReadTokens:  25,
-		CacheWriteTokens: 10,
-		ThinkingTokens:   5,
-		CostUSD:          0.0042,
+		InputTokens:       100,
+		OutputTokens:      50,
+		CacheReadTokens:   25,
+		CacheWriteTokens:  10,
+		ThinkingTokens:    5,
+		CostUSD:           0.0042,
+		ContextSizeTokens: 200000,
+		ContextUsedTokens: 45000,
 	}
 	data, err := json.Marshal(u)
 	if err != nil {
