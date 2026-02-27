@@ -8,8 +8,8 @@ import (
 
 	"github.com/dmora/agentrun"
 	"github.com/dmora/agentrun/engine/cli"
-	"github.com/dmora/agentrun/engine/cli/internal/errfmt"
 	"github.com/dmora/agentrun/engine/cli/internal/jsonutil"
+	"github.com/dmora/agentrun/engine/internal/errfmt"
 )
 
 // eventParser parses a raw JSON event into an agentrun.Message.
@@ -154,7 +154,8 @@ func parseError(raw map[string]any, msg *agentrun.Message) {
 		return
 	}
 
-	code := jsonutil.GetString(errObj, "name")
+	// OpenCode wire format uses "name" for error code (not "code").
+	msg.ErrorCode = errfmt.SanitizeCode(jsonutil.GetString(errObj, "name"))
 	message := ""
 	if data := jsonutil.GetMap(errObj, "data"); data != nil {
 		message = jsonutil.GetString(data, "message")
@@ -163,7 +164,7 @@ func parseError(raw map[string]any, msg *agentrun.Message) {
 	if message == "" {
 		message = jsonutil.GetString(errObj, "message")
 	}
-	msg.Content = errfmt.Format(code, message)
+	msg.Content = errfmt.Truncate(message)
 }
 
 // parseTimestamp extracts a millisecond Unix timestamp from the "timestamp" field.

@@ -64,13 +64,13 @@ agentrun (interfaces)
 │   ├── process.go       ← process impl, readLoop, signalProcess (!windows)
 │   ├── options.go       ← EngineOptions, EngineOption, With* functions
 │   ├── internal/        ← Shared helpers (not importable by consumers)
-│   │   ├── errfmt/      ← Error formatting for CLI parsers
 │   │   ├── jsonutil/    ← JSON extraction (GetString, GetInt, ContainsNull)
 │   │   └── optutil/     ← Option resolution (RootOptionsSet)
 │   ├── claude/          ← Claude Code backend
 │   ├── codex/           ← Codex CLI backend
 │   └── opencode/        ← OpenCode backend
 ├── engine/internal/     ← Shared helpers across all engine types (not importable by consumers)
+│   ├── errfmt/          ← Error formatting + ErrorCode sanitization (Truncate, SanitizeCode)
 │   └── stoputil/        ← StopReason sanitization (control char rejection, length truncation)
 ├── engine/acp/          ← ACP engine: JSON-RPC 2.0 persistent subprocess
 │   ├── conn.go          ← Bidirectional JSON-RPC 2.0 Conn (platform-agnostic)
@@ -95,7 +95,7 @@ agentrun (interfaces)
 | `engine/cli/claude` | Claude Code backend (all 5 cli interfaces: Spawner, Parser, Resumer, Streamer, InputFormatter) |
 | `engine/cli/codex` | Codex CLI backend (Spawner, Parser, Resumer — resume-per-turn) |
 | `engine/cli/opencode` | OpenCode backend (Spawner, Parser, Resumer) |
-| `engine/cli/internal/errfmt` | Shared error formatting for CLI parsers |
+| `engine/internal/errfmt` | Shared error formatting + ErrorCode sanitization for all engine parsers |
 | `engine/cli/internal/jsonutil` | Shared JSON extraction helpers (GetString, GetInt, GetMap, ContainsNull) |
 | `engine/cli/internal/optutil` | Shared option resolution + validation (RootOptionsSet, ValidateModeHITL) |
 | `engine/internal/stoputil` | Shared StopReason sanitization (control char rejection, rune-safe truncation) — used by CLI and ACP engines |
@@ -127,4 +127,4 @@ agentrun (interfaces)
 - **StopReason type**: Output vocabulary (open set, no `Valid()` method). Only 3 universal constants in root (`StopEndTurn`, `StopMaxTokens`, `StopToolUse`). Backend-specific values pass through as raw strings. Consumers should handle unknown values gracefully.
 - **StopReason carry-forward**: Claude CLI `result.stop_reason` is null in streaming mode. Real stop_reason arrives in `message_delta` events. Engine readLoop carries it forward via goroutine-local variable (`applyStopReasonCarryForward` in `engine/cli/process.go`). Init resets stale state, result applies (no clobber). Backend stays stateless.
 - **CostUSD**: `float64` matching Claude CLI wire format. Parsers must sanitize NaN/Inf/negative to zero before populating. Documented as approximate (not for billing reconciliation). Pragmatic exception to "2+ backends" rule — cost tracking is a universal orchestrator need.
-- **ErrorCode**: Machine-readable error code on `MessageError`. Format is backend-specific (CLI: string codes like `"rate_limit"`, ACP: stringified JSON-RPC codes). Human-readable description stays in `Content`. **Phase B — field exists but parsers do not populate it yet.**
+- **ErrorCode**: Machine-readable error code on `MessageError`. Format is backend-specific (CLI: string codes like `"rate_limit"`, ACP: exported constants like `acp.ErrCodeToolCallFailed`). Human-readable description stays in `Content`. Sanitized via `errfmt.SanitizeCode` (reject-on-control, 128-byte cap).

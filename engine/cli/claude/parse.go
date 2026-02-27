@@ -10,6 +10,7 @@ import (
 	"github.com/dmora/agentrun"
 	"github.com/dmora/agentrun/engine/cli"
 	"github.com/dmora/agentrun/engine/cli/internal/jsonutil"
+	"github.com/dmora/agentrun/engine/internal/errfmt"
 	"github.com/dmora/agentrun/engine/internal/stoputil"
 )
 
@@ -187,17 +188,13 @@ func parseResultMessage(raw map[string]any, msg *agentrun.Message) {
 // parseErrorMessage handles "error" events.
 func parseErrorMessage(raw map[string]any, msg *agentrun.Message) {
 	msg.Type = agentrun.MessageError
-	code := jsonutil.GetString(raw, "code")
-	message := jsonutil.GetString(raw, "message")
+	msg.ErrorCode = errfmt.SanitizeCode(jsonutil.GetString(raw, "code"))
+	msg.Content = jsonutil.GetString(raw, "message")
 	// Fallback: "error" field as string.
-	if message == "" {
-		message = jsonutil.GetString(raw, "error")
+	if msg.Content == "" {
+		msg.Content = jsonutil.GetString(raw, "error")
 	}
-	if code != "" {
-		msg.Content = code + ": " + message
-	} else {
-		msg.Content = message
-	}
+	msg.Content = errfmt.Truncate(msg.Content)
 }
 
 // parseStreamEvent handles "stream_event" wrapper events from --include-partial-messages.

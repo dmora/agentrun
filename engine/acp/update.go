@@ -19,7 +19,13 @@ import (
 	"time"
 
 	"github.com/dmora/agentrun"
+	"github.com/dmora/agentrun/engine/internal/errfmt"
 )
+
+// ErrCodeToolCallFailed is the ErrorCode for failed tool calls.
+// Library-defined (not from ACP wire format) — the ACP protocol has no
+// structured error code on tool_call_update failures.
+const ErrCodeToolCallFailed = "tool_call_failed"
 
 // updateParser converts a raw session update into a Message.
 // Returns nil to indicate the update should be silently consumed (e.g. usage_update).
@@ -58,7 +64,7 @@ func parseSessionUpdate(update json.RawMessage) *agentrun.Message {
 	if err := json.Unmarshal(update, &header); err != nil {
 		msg := agentrun.Message{
 			Type:      agentrun.MessageError,
-			Content:   fmt.Sprintf("acp: unmarshal session update header: %v", err),
+			Content:   errfmt.Truncate(fmt.Sprintf("acp: unmarshal session update header: %v", err)),
 			Timestamp: time.Now(),
 		}
 		return &msg
@@ -96,8 +102,9 @@ func parseSessionUpdate(update json.RawMessage) *agentrun.Message {
 // unmarshalError produces a MessageError for a failed unmarshal in a parser.
 func unmarshalError(updateType string, err error) *agentrun.Message {
 	msg := agentrun.Message{
-		Type:    agentrun.MessageError,
-		Content: fmt.Sprintf("acp: unmarshal %s: %v", updateType, err),
+		Type:      agentrun.MessageError,
+		Content:   errfmt.Truncate(fmt.Sprintf("acp: unmarshal %s: %v", updateType, err)),
+		Timestamp: time.Now(),
 	}
 	return &msg
 }
@@ -161,8 +168,9 @@ func parseToolCallUpdate(update json.RawMessage) *agentrun.Message {
 
 	case "failed":
 		msg := agentrun.Message{
-			Type:    agentrun.MessageError,
-			Content: fmt.Sprintf("tool_call failed: %s", d.Title),
+			Type:      agentrun.MessageError,
+			ErrorCode: ErrCodeToolCallFailed,
+			Content:   errfmt.Truncate(fmt.Sprintf("tool_call failed: %s", d.Title)),
 		}
 		return &msg
 

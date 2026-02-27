@@ -101,11 +101,13 @@ type Message struct {
 	//
 	// Intentionally a plain string (not a named type like StopReason):
 	// error codes have no universal constants across backends — CLI backends
-	// emit string codes (e.g., "rate_limit"), ACP emits stringified JSON-RPC
-	// error codes (e.g., "-32000"). A named type would imply root-level
-	// constants that don't exist. Consumers should match on raw string values.
+	// emit string codes (e.g., "rate_limit"), ACP emits library-defined
+	// constants (e.g., acp.ErrCodeToolCallFailed). A named type would imply
+	// root-level constants that don't exist. Consumers should match on raw
+	// string values or use backend-exported constants where available.
 	//
-	// Backend parsers populate this field starting in Phase B (ErrorCode PR).
+	// Backend parsers populate this field when the wire format includes a
+	// structured error code. Empty means no code was provided.
 	ErrorCode string `json:"error_code,omitempty"`
 
 	// ResumeID is the backend-assigned session identifier for resume.

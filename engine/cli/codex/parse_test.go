@@ -14,6 +14,7 @@ import (
 const (
 	testValidThreadID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 	unknownError      = "unknown error"
+	turnFailed        = "turn failed"
 )
 
 // --- thread.started ---
@@ -243,8 +244,11 @@ func TestParseLine_ItemError(t *testing.T) {
 	if msg.Type != agentrun.MessageError {
 		t.Errorf("Type = %q, want %q", msg.Type, agentrun.MessageError)
 	}
-	if msg.Content != "ERR01: something broke" {
-		t.Errorf("Content = %q, want %q", msg.Content, "ERR01: something broke")
+	if msg.ErrorCode != "ERR01" {
+		t.Errorf("ErrorCode = %q, want %q", msg.ErrorCode, "ERR01")
+	}
+	if msg.Content != "something broke" {
+		t.Errorf("Content = %q, want %q", msg.Content, "something broke")
 	}
 }
 
@@ -257,6 +261,9 @@ func TestParseLine_ItemError_Fallback(t *testing.T) {
 	if msg.Content != "fallback text" {
 		t.Errorf("Content = %q, want %q", msg.Content, "fallback text")
 	}
+	if msg.ErrorCode != "" {
+		t.Errorf("ErrorCode = %q, want empty", msg.ErrorCode)
+	}
 }
 
 func TestParseLine_ItemError_NoMessage(t *testing.T) {
@@ -267,6 +274,20 @@ func TestParseLine_ItemError_NoMessage(t *testing.T) {
 	}
 	if msg.Content != unknownError {
 		t.Errorf("Content = %q, want %q", msg.Content, unknownError)
+	}
+	if msg.ErrorCode != "" {
+		t.Errorf("ErrorCode = %q, want empty", msg.ErrorCode)
+	}
+}
+
+func TestParseLine_ItemError_ControlCharCode(t *testing.T) {
+	b := New()
+	msg, err := b.ParseLine(`{"type":"item.completed","item":{"type":"error","message":"broke","code":"\u0000ERR"}}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.ErrorCode != "" {
+		t.Errorf("ErrorCode = %q, want empty (control char rejection)", msg.ErrorCode)
 	}
 }
 
@@ -429,8 +450,11 @@ func TestParseLine_TurnFailed(t *testing.T) {
 	if msg.Type != agentrun.MessageError {
 		t.Errorf("Type = %q, want %q", msg.Type, agentrun.MessageError)
 	}
-	if msg.Content != "TIMEOUT: request timed out" {
-		t.Errorf("Content = %q, want %q", msg.Content, "TIMEOUT: request timed out")
+	if msg.ErrorCode != "TIMEOUT" {
+		t.Errorf("ErrorCode = %q, want %q", msg.ErrorCode, "TIMEOUT")
+	}
+	if msg.Content != "request timed out" {
+		t.Errorf("Content = %q, want %q", msg.Content, "request timed out")
 	}
 }
 
@@ -443,8 +467,25 @@ func TestParseLine_TurnFailed_NoError(t *testing.T) {
 	if msg.Type != agentrun.MessageError {
 		t.Errorf("Type = %q, want %q", msg.Type, agentrun.MessageError)
 	}
-	if msg.Content != "turn failed" {
-		t.Errorf("Content = %q, want %q", msg.Content, "turn failed")
+	if msg.Content != turnFailed {
+		t.Errorf("Content = %q, want %q", msg.Content, turnFailed)
+	}
+	if msg.ErrorCode != "" {
+		t.Errorf("ErrorCode = %q, want empty", msg.ErrorCode)
+	}
+}
+
+func TestParseLine_TurnFailed_ControlCharCode(t *testing.T) {
+	b := New()
+	msg, err := b.ParseLine(`{"type":"turn.failed","error":{"code":"\u0000TIMEOUT","message":"timed out"}}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Type != agentrun.MessageError {
+		t.Errorf("Type = %q, want %q", msg.Type, agentrun.MessageError)
+	}
+	if msg.ErrorCode != "" {
+		t.Errorf("ErrorCode = %q, want empty (control char rejection)", msg.ErrorCode)
 	}
 }
 
@@ -462,6 +503,9 @@ func TestParseLine_TopLevelError(t *testing.T) {
 	if msg.Content != "rate limited" {
 		t.Errorf("Content = %q, want %q", msg.Content, "rate limited")
 	}
+	if msg.ErrorCode != "" {
+		t.Errorf("ErrorCode = %q, want empty", msg.ErrorCode)
+	}
 }
 
 func TestParseLine_TopLevelError_NoMessage(t *testing.T) {
@@ -472,6 +516,9 @@ func TestParseLine_TopLevelError_NoMessage(t *testing.T) {
 	}
 	if msg.Content != unknownError {
 		t.Errorf("Content = %q, want %q", msg.Content, unknownError)
+	}
+	if msg.ErrorCode != "" {
+		t.Errorf("ErrorCode = %q, want empty", msg.ErrorCode)
 	}
 }
 

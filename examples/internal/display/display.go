@@ -26,14 +26,43 @@ func PrintMessage(msg agentrun.Message) {
 		fmt.Printf("[text]    %s\n", msg.Content)
 	case agentrun.MessageResult:
 		fmt.Printf("[result]  %s\n", msg.Content)
+		printResultDetails(msg)
 	case agentrun.MessageError:
-		fmt.Fprintf(os.Stderr, "[error]   %s\n", msg.Content)
+		printError(msg)
 	case agentrun.MessageToolResult:
 		fmt.Printf("[tool]    %s\n", msg.Tool.Name)
 	case agentrun.MessageSystem, agentrun.MessageEOF:
 		// silent — system status and EOF are infrastructure signals
 	default:
 		fmt.Printf("[%s]  %s\n", msg.Type, msg.Content)
+	}
+}
+
+// printResultDetails prints StopReason and Usage details for result messages.
+func printResultDetails(msg agentrun.Message) {
+	if msg.StopReason != "" {
+		fmt.Printf("          stop_reason: %s\n", msg.StopReason)
+	}
+	if msg.Usage == nil {
+		return
+	}
+	u := msg.Usage
+	fmt.Printf("          usage: in=%d out=%d", u.InputTokens, u.OutputTokens)
+	if u.CacheReadTokens > 0 {
+		fmt.Printf(" cache_read=%d", u.CacheReadTokens)
+	}
+	if u.CostUSD > 0 {
+		fmt.Printf(" cost=$%.4f", u.CostUSD)
+	}
+	fmt.Println()
+}
+
+// printError prints an error message, including ErrorCode when present.
+func printError(msg agentrun.Message) {
+	if msg.ErrorCode != "" {
+		fmt.Fprintf(os.Stderr, "[error]   [%s] %s\n", msg.ErrorCode, msg.Content)
+	} else {
+		fmt.Fprintf(os.Stderr, "[error]   %s\n", msg.Content)
 	}
 }
 
@@ -47,6 +76,28 @@ func PrintRaw(msg agentrun.Message) {
 		content = content[:120] + "..."
 	}
 	fmt.Printf("[%s] %-18s %s\n", ts, msg.Type, content)
+	printRawMetadata(msg)
+}
+
+// printRawMetadata prints ErrorCode, StopReason, Usage, and Raw when present.
+func printRawMetadata(msg agentrun.Message) {
+	if msg.ErrorCode != "" {
+		fmt.Printf("           error_code: %s\n", msg.ErrorCode)
+	}
+	if msg.StopReason != "" {
+		fmt.Printf("           stop_reason: %s\n", msg.StopReason)
+	}
+	if msg.Usage != nil {
+		u := msg.Usage
+		fmt.Printf("           usage: in=%d out=%d", u.InputTokens, u.OutputTokens)
+		if u.CacheReadTokens > 0 {
+			fmt.Printf(" cache_read=%d", u.CacheReadTokens)
+		}
+		if u.CostUSD > 0 {
+			fmt.Printf(" cost=$%.4f", u.CostUSD)
+		}
+		fmt.Println()
+	}
 	if len(msg.Raw) > 0 {
 		raw := string(msg.Raw)
 		if len(raw) > 200 {
