@@ -16,6 +16,8 @@
 //	ACP_MOCK_MODE=set-config-fail   — return error for session/set_config_option
 //	ACP_MOCK_MODE=slow-prompt       — delay prompt response by 2s (for ctx cancel tests)
 //	ACP_MOCK_MODE=prompt-then-exit  — respond to prompt then exit (for done+errCh race test)
+//	ACP_MOCK_MODE=rich-usage        — respond with extended usage (cache, thinking tokens)
+//	ACP_MOCK_MODE=no-usage          — respond with no usage at all (nil)
 package main
 
 import (
@@ -212,14 +214,33 @@ func handleSessionPrompt(req *rpcRequest) {
 	})
 
 	// Send RPC response (turn complete).
-	respond(req.ID, map[string]any{
-		"stopReason": "end_turn",
-		"usage": map[string]int{
-			"inputTokens":  100,
-			"outputTokens": 50,
-			"totalTokens":  150,
-		},
-	})
+	switch mode {
+	case "rich-usage":
+		respond(req.ID, map[string]any{
+			"stopReason": "end_turn",
+			"usage": map[string]int{
+				"inputTokens":       500,
+				"outputTokens":      200,
+				"totalTokens":       700,
+				"cachedReadTokens":  80,
+				"cachedWriteTokens": 30,
+				"thoughtTokens":     120,
+			},
+		})
+	case "no-usage":
+		respond(req.ID, map[string]any{
+			"stopReason": "max_tokens",
+		})
+	default:
+		respond(req.ID, map[string]any{
+			"stopReason": "end_turn",
+			"usage": map[string]int{
+				"inputTokens":  100,
+				"outputTokens": 50,
+				"totalTokens":  150,
+			},
+		})
+	}
 
 	// Exit immediately after prompt response — exercises the Send()
 	// done+errCh race where the process exits right after RPC completes.

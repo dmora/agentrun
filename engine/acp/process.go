@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/dmora/agentrun"
+	"github.com/dmora/agentrun/engine/internal/stoputil"
 )
 
 // process implements agentrun.Process for ACP subprocess sessions.
@@ -126,11 +127,24 @@ func (p *process) handlePromptResult(err error, result *promptResult) error {
 	if err != nil {
 		return fmt.Errorf("acp: prompt: %w", err)
 	}
-	p.emit(agentrun.Message{
-		Type:      agentrun.MessageResult,
-		Content:   result.StopReason,
-		Timestamp: time.Now(),
-	})
+	msg := agentrun.Message{
+		Type:       agentrun.MessageResult,
+		StopReason: stoputil.Sanitize(result.StopReason),
+		Timestamp:  time.Now(),
+	}
+	if u := result.Usage; u != nil {
+		if u.InputTokens != 0 || u.OutputTokens != 0 ||
+			u.CachedReadTokens != 0 || u.CachedWriteTokens != 0 || u.ThoughtTokens != 0 {
+			msg.Usage = &agentrun.Usage{
+				InputTokens:      u.InputTokens,
+				OutputTokens:     u.OutputTokens,
+				CacheReadTokens:  u.CachedReadTokens,
+				CacheWriteTokens: u.CachedWriteTokens,
+				ThinkingTokens:   u.ThoughtTokens,
+			}
+		}
+	}
+	p.emit(msg)
 	return nil
 }
 

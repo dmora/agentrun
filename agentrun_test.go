@@ -143,10 +143,19 @@ func TestMessageJSON_Full(t *testing.T) {
 			Name:  "read_file",
 			Input: json.RawMessage(`{"path":"foo.go"}`),
 		},
-		Usage:     &Usage{InputTokens: 100, OutputTokens: 50},
-		ResumeID:  "ses_abc123",
-		Raw:       json.RawMessage(`{"raw":true}`),
-		Timestamp: ts,
+		Usage: &Usage{
+			InputTokens:      100,
+			OutputTokens:     50,
+			CacheReadTokens:  25,
+			CacheWriteTokens: 10,
+			ThinkingTokens:   5,
+			CostUSD:          0.0042,
+		},
+		StopReason: StopEndTurn,
+		ErrorCode:  "rate_limit",
+		ResumeID:   "ses_abc123",
+		Raw:        json.RawMessage(`{"raw":true}`),
+		Timestamp:  ts,
 	}
 
 	data, err := json.Marshal(msg)
@@ -159,24 +168,50 @@ func TestMessageJSON_Full(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	if got.Type != MessageText {
-		t.Errorf("Type: want %q, got %q", MessageText, got.Type)
-	}
-	if got.Content != "hi there" {
-		t.Errorf("Content: want 'hi there', got %q", got.Content)
-	}
-	if got.Tool == nil || got.Tool.Name != "read_file" {
-		t.Errorf("Tool.Name: want read_file, got %v", got.Tool)
-	}
-	if got.Usage == nil || got.Usage.InputTokens != 100 || got.Usage.OutputTokens != 50 {
-		t.Errorf("Usage: want {100,50}, got %v", got.Usage)
-	}
-	if got.ResumeID != "ses_abc123" {
-		t.Errorf("ResumeID: want 'ses_abc123', got %q", got.ResumeID)
-	}
-	if !got.Timestamp.Equal(ts) {
-		t.Errorf("Timestamp: want %v, got %v", ts, got.Timestamp)
-	}
+	t.Run("BaseFields", func(t *testing.T) {
+		if got.Type != MessageText {
+			t.Errorf("Type: want %q, got %q", MessageText, got.Type)
+		}
+		if got.Content != "hi there" {
+			t.Errorf("Content: want 'hi there', got %q", got.Content)
+		}
+		if got.Tool == nil || got.Tool.Name != "read_file" {
+			t.Errorf("Tool.Name: want read_file, got %v", got.Tool)
+		}
+		if got.StopReason != StopEndTurn {
+			t.Errorf("StopReason: want %q, got %q", StopEndTurn, got.StopReason)
+		}
+		if got.ErrorCode != "rate_limit" {
+			t.Errorf("ErrorCode: want 'rate_limit', got %q", got.ErrorCode)
+		}
+		if got.ResumeID != "ses_abc123" {
+			t.Errorf("ResumeID: want 'ses_abc123', got %q", got.ResumeID)
+		}
+		if !got.Timestamp.Equal(ts) {
+			t.Errorf("Timestamp: want %v, got %v", ts, got.Timestamp)
+		}
+	})
+
+	t.Run("Usage", func(t *testing.T) {
+		if got.Usage == nil {
+			t.Fatal("Usage should be populated")
+		}
+		if got.Usage.InputTokens != 100 || got.Usage.OutputTokens != 50 {
+			t.Errorf("Usage base: want {100,50}, got {%d,%d}", got.Usage.InputTokens, got.Usage.OutputTokens)
+		}
+		if got.Usage.CacheReadTokens != 25 {
+			t.Errorf("CacheReadTokens: want 25, got %d", got.Usage.CacheReadTokens)
+		}
+		if got.Usage.CacheWriteTokens != 10 {
+			t.Errorf("CacheWriteTokens: want 10, got %d", got.Usage.CacheWriteTokens)
+		}
+		if got.Usage.ThinkingTokens != 5 {
+			t.Errorf("ThinkingTokens: want 5, got %d", got.Usage.ThinkingTokens)
+		}
+		if got.Usage.CostUSD != 0.0042 {
+			t.Errorf("CostUSD: want 0.0042, got %f", got.Usage.CostUSD)
+		}
+	})
 }
 
 func TestMessageJSON_Minimal(t *testing.T) {
@@ -197,7 +232,7 @@ func TestMessageJSON_Minimal(t *testing.T) {
 		t.Error("type field should be present")
 	}
 	// Timestamp is always present (time.Time is not omitempty-compatible).
-	for _, key := range []string{"content", "tool", "usage", "resume_id", "raw"} {
+	for _, key := range []string{"content", "tool", "usage", "stop_reason", "error_code", "resume_id", "raw"} {
 		if _, ok := raw[key]; ok {
 			t.Errorf("field %q should be omitted on minimal message", key)
 		}
@@ -459,5 +494,71 @@ func TestSessionOptions_MapAliasing(t *testing.T) {
 	// Document: shallow copy shares the map. This test documents the behavior.
 	if original.Options["key"] != "mutated" {
 		t.Fatal("Session is a value type with a reference-type map; shallow copy shares Options")
+	}
+}
+
+// --- Usage JSON tests ---
+
+func TestUsage_JSON_OmitemptyNewFields(t *testing.T) {
+	u := Usage{InputTokens: 10, OutputTokens: 5}
+	data, err := json.Marshal(u)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, key := range []string{"cache_read_tokens", "cache_write_tokens", "thinking_tokens", "cost_usd"} {
+		if _, ok := raw[key]; ok {
+			t.Errorf("field %q should be omitted when zero", key)
+		}
+	}
+	// Existing fields always present (no omitempty).
+	for _, key := range []string{"input_tokens", "output_tokens"} {
+		if _, ok := raw[key]; !ok {
+			t.Errorf("field %q should always be present", key)
+		}
+	}
+}
+
+func TestUsage_JSON_WithAllFields(t *testing.T) {
+	u := Usage{
+		InputTokens:      100,
+		OutputTokens:     50,
+		CacheReadTokens:  25,
+		CacheWriteTokens: 10,
+		ThinkingTokens:   5,
+		CostUSD:          0.0042,
+	}
+	data, err := json.Marshal(u)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got Usage
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got != u {
+		t.Errorf("round-trip mismatch: got %+v, want %+v", got, u)
+	}
+}
+
+func TestStopReasonConstants(t *testing.T) {
+	tests := []struct {
+		name string
+		sr   StopReason
+		want string
+	}{
+		{"EndTurn", StopEndTurn, "end_turn"},
+		{"MaxTokens", StopMaxTokens, "max_tokens"},
+		{"ToolUse", StopToolUse, "tool_use"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if string(tt.sr) != tt.want {
+				t.Errorf("StopReason = %q, want %q", tt.sr, tt.want)
+			}
+		})
 	}
 }

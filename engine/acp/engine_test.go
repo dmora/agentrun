@@ -909,3 +909,150 @@ func TestEngine_Validate(t *testing.T) {
 		}
 	})
 }
+
+// --- handlePromptResult integration tests ---
+
+// findResult returns the first MessageResult from a slice, or nil.
+func findResult(msgs []agentrun.Message) *agentrun.Message {
+	for i := range msgs {
+		if msgs[i].Type == agentrun.MessageResult {
+			return &msgs[i]
+		}
+	}
+	return nil
+}
+
+func TestEngine_Send_ResultStopReason(t *testing.T) {
+	proc, ctx := startProc(t)
+	<-proc.Output() // drain init
+
+	if err := proc.Send(ctx, "test"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	msgs := collectUntilResult(proc.Output())
+	result := findResult(msgs)
+	if result == nil {
+		t.Fatal("no MessageResult received")
+	}
+	if result.StopReason != agentrun.StopEndTurn {
+		t.Errorf("StopReason = %q, want %q", result.StopReason, agentrun.StopEndTurn)
+	}
+}
+
+func TestEngine_Send_ResultUsage(t *testing.T) {
+	proc, ctx := startProc(t)
+	<-proc.Output() // drain init
+
+	if err := proc.Send(ctx, "test"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	msgs := collectUntilResult(proc.Output())
+	result := findResult(msgs)
+	if result == nil {
+		t.Fatal("no MessageResult received")
+	}
+	if result.Usage == nil {
+		t.Fatal("Usage should be populated")
+	}
+	if result.Usage.InputTokens != 100 {
+		t.Errorf("InputTokens = %d, want 100", result.Usage.InputTokens)
+	}
+	if result.Usage.OutputTokens != 50 {
+		t.Errorf("OutputTokens = %d, want 50", result.Usage.OutputTokens)
+	}
+}
+
+func TestEngine_Send_ResultRichUsage(t *testing.T) {
+	wrapper := writeScript(t, "rich-usage")
+	engine := acp.NewEngine(acp.WithBinary(wrapper))
+
+	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	defer cancel()
+
+	proc, err := engine.Start(ctx, agentrun.Session{CWD: t.TempDir()})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = proc.Stop(context.Background()) })
+
+	<-proc.Output() // drain init
+
+	if err := proc.Send(ctx, "test"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	msgs := collectUntilResult(proc.Output())
+	result := findResult(msgs)
+	if result == nil {
+		t.Fatal("no MessageResult received")
+	}
+	if result.Usage == nil {
+		t.Fatal("Usage should be populated")
+	}
+	if result.Usage.InputTokens != 500 {
+		t.Errorf("InputTokens = %d, want 500", result.Usage.InputTokens)
+	}
+	if result.Usage.OutputTokens != 200 {
+		t.Errorf("OutputTokens = %d, want 200", result.Usage.OutputTokens)
+	}
+	if result.Usage.CacheReadTokens != 80 {
+		t.Errorf("CacheReadTokens = %d, want 80", result.Usage.CacheReadTokens)
+	}
+	if result.Usage.CacheWriteTokens != 30 {
+		t.Errorf("CacheWriteTokens = %d, want 30", result.Usage.CacheWriteTokens)
+	}
+	if result.Usage.ThinkingTokens != 120 {
+		t.Errorf("ThinkingTokens = %d, want 120", result.Usage.ThinkingTokens)
+	}
+	if result.StopReason != agentrun.StopEndTurn {
+		t.Errorf("StopReason = %q, want %q", result.StopReason, agentrun.StopEndTurn)
+	}
+}
+
+func TestEngine_Send_ResultNoUsage(t *testing.T) {
+	wrapper := writeScript(t, "no-usage")
+	engine := acp.NewEngine(acp.WithBinary(wrapper))
+
+	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	defer cancel()
+
+	proc, err := engine.Start(ctx, agentrun.Session{CWD: t.TempDir()})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = proc.Stop(context.Background()) })
+
+	<-proc.Output() // drain init
+
+	if err := proc.Send(ctx, "test"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	msgs := collectUntilResult(proc.Output())
+	result := findResult(msgs)
+	if result == nil {
+		t.Fatal("no MessageResult received")
+	}
+	if result.Usage != nil {
+		t.Errorf("Usage should be nil when not reported, got %+v", result.Usage)
+	}
+	if result.StopReason != agentrun.StopMaxTokens {
+		t.Errorf("StopReason = %q, want %q", result.StopReason, agentrun.StopMaxTokens)
+	}
+}
+
+func TestEngine_Send_ResultContentEmpty(t *testing.T) {
+	// Content should be empty on MessageResult — StopReason is in the field.
+	proc, ctx := startProc(t)
+	<-proc.Output() // drain init
+
+	if err := proc.Send(ctx, "test"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	msgs := collectUntilResult(proc.Output())
+	result := findResult(msgs)
+	if result == nil {
+		t.Fatal("no MessageResult received")
+	}
+	if result.Content != "" {
+		t.Errorf("Content should be empty on result, got %q", result.Content)
+	}
+}

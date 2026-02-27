@@ -410,9 +410,11 @@ func TestParseLine_TurnCompleted_CachedTokens(t *testing.T) {
 	if msg.Usage == nil {
 		t.Fatal("Usage is nil")
 	}
-	// input_tokens + cached_input_tokens = 1500
-	if msg.Usage.InputTokens != 1500 {
-		t.Errorf("InputTokens = %d, want 1500 (1000+500)", msg.Usage.InputTokens)
+	if msg.Usage.InputTokens != 1000 {
+		t.Errorf("InputTokens = %d, want 1000", msg.Usage.InputTokens)
+	}
+	if msg.Usage.CacheReadTokens != 500 {
+		t.Errorf("CacheReadTokens = %d, want 500", msg.Usage.CacheReadTokens)
 	}
 }
 
@@ -634,10 +636,16 @@ func TestParseLine_GoldenFixture_CommandTurn(t *testing.T) {
 		}
 	}
 
-	// Verify usage: 200 + 50 cached = 250.
+	// Verify usage: input=200, cached=50 (separated, not folded).
 	lastMsg, _ := b.ParseLine(lines[5])
-	if lastMsg.Usage == nil || lastMsg.Usage.InputTokens != 250 {
-		t.Errorf("expected InputTokens=250 (200+50 cached)")
+	if lastMsg.Usage == nil {
+		t.Fatal("expected non-nil Usage on turn.completed")
+	}
+	if lastMsg.Usage.InputTokens != 200 {
+		t.Errorf("InputTokens = %d, want 200", lastMsg.Usage.InputTokens)
+	}
+	if lastMsg.Usage.CacheReadTokens != 50 {
+		t.Errorf("CacheReadTokens = %d, want 50", lastMsg.Usage.CacheReadTokens)
 	}
 }
 
@@ -742,8 +750,11 @@ func TestParseLine_TurnCompleted_CachedOnly(t *testing.T) {
 	if msg.Usage == nil {
 		t.Fatal("Usage is nil, want non-nil for cached_input_tokens=500")
 	}
-	if msg.Usage.InputTokens != 500 {
-		t.Errorf("InputTokens = %d, want 500 (cached only)", msg.Usage.InputTokens)
+	if msg.Usage.InputTokens != 0 {
+		t.Errorf("InputTokens = %d, want 0", msg.Usage.InputTokens)
+	}
+	if msg.Usage.CacheReadTokens != 500 {
+		t.Errorf("CacheReadTokens = %d, want 500", msg.Usage.CacheReadTokens)
 	}
 }
 

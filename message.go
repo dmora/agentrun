@@ -28,6 +28,8 @@ const (
 	MessageInit MessageType = "init"
 
 	// MessageResult signals turn completion with optional usage data.
+	// The completion reason is in Message.StopReason (not Content).
+	// Token usage and cost data are in Message.Usage.
 	MessageResult MessageType = "result"
 
 	// MessageEOF signals the end of the message stream.
@@ -71,10 +73,12 @@ type Message struct {
 	// Type identifies the kind of message.
 	Type MessageType `json:"type"`
 
-	// Content is the text content. Holds complete text for Text messages,
-	// error descriptions for Error, delta payloads (text fragment, JSON
-	// fragment, or thinking fragment) for *Delta messages, and status
-	// text for System messages.
+	// Content is the text content. Semantics vary by Type:
+	//   - MessageText: assistant text output
+	//   - MessageError: human-readable error description (see ErrorCode for machine-readable)
+	//   - MessageSystem: status text
+	//   - MessageResult: optional result text (may be empty; see StopReason for completion signal)
+	//   - *Delta types: partial content fragment (text, JSON, or thinking)
 	Content string `json:"content,omitempty"`
 
 	// Tool contains tool invocation details (for ToolUse, ToolResult messages).
@@ -82,6 +86,27 @@ type Message struct {
 
 	// Usage contains token usage data (typically on Text messages).
 	Usage *Usage `json:"usage,omitempty"`
+
+	// StopReason indicates why the agent's turn ended.
+	// Set exclusively on MessageResult messages. Empty means the backend
+	// did not report a stop reason.
+	//
+	// Consumers should handle unknown values gracefully — backends may
+	// report values beyond the StopReason constants defined in this package.
+	StopReason StopReason `json:"stop_reason,omitempty"`
+
+	// ErrorCode is the machine-readable error code from the backend.
+	// Set exclusively on MessageError messages. Human-readable description
+	// is in Content. Empty means no structured code was provided.
+	//
+	// Intentionally a plain string (not a named type like StopReason):
+	// error codes have no universal constants across backends — CLI backends
+	// emit string codes (e.g., "rate_limit"), ACP emits stringified JSON-RPC
+	// error codes (e.g., "-32000"). A named type would imply root-level
+	// constants that don't exist. Consumers should match on raw string values.
+	//
+	// Backend parsers populate this field starting in Phase B (ErrorCode PR).
+	ErrorCode string `json:"error_code,omitempty"`
 
 	// ResumeID is the backend-assigned session identifier for resume.
 	// Set exclusively on MessageInit messages. Consumers persist this value
@@ -111,11 +136,52 @@ type ToolCall struct {
 	Output json.RawMessage `json:"output,omitempty"`
 }
 
+// StopReason indicates why an agent's turn ended.
+// This is output vocabulary — backends populate it, consumers read it.
+// Unknown values pass through as-is (the type is an open set, not a closed enum).
+//
+// No Valid() method: unlike Mode/HITL/Effort (input vocabulary validated
+// before reaching a subprocess), StopReason is read-only output that
+// consumers match on. Adding Valid() would imply a closed set and force
+// updates to root when a new backend introduces a new stop reason.
+type StopReason string
+
+const (
+	// StopEndTurn means the agent completed its response normally.
+	StopEndTurn StopReason = "end_turn"
+
+	// StopMaxTokens means the response was truncated due to token limits.
+	StopMaxTokens StopReason = "max_tokens"
+
+	// StopToolUse means the agent stopped to invoke a tool.
+	StopToolUse StopReason = "tool_use"
+)
+
 // Usage contains token usage data from the agent's model.
 type Usage struct {
 	// InputTokens is the cumulative context window fill.
+	// Always serialized (0 means zero tokens used).
 	InputTokens int `json:"input_tokens"`
 
 	// OutputTokens is the number of tokens generated.
+	// Always serialized (0 means zero tokens generated).
 	OutputTokens int `json:"output_tokens"`
+
+	// CacheReadTokens is tokens served from cache instead of recomputed.
+	// Omitted when zero (0 means not reported by this backend).
+	CacheReadTokens int `json:"cache_read_tokens,omitempty"`
+
+	// CacheWriteTokens is tokens written to cache for future reuse.
+	// Omitted when zero (0 means not reported by this backend).
+	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
+
+	// ThinkingTokens is tokens used for model reasoning/thinking.
+	// Omitted when zero (0 means not reported by this backend).
+	ThinkingTokens int `json:"thinking_tokens,omitempty"`
+
+	// CostUSD is the estimated cost in USD for this turn.
+	// Omitted when zero. Always a finite non-negative value; parsers
+	// must sanitize NaN/Inf to zero before populating this field.
+	// Approximate — not suitable for billing reconciliation.
+	CostUSD float64 `json:"cost_usd,omitempty"`
 }

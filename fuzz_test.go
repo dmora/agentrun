@@ -95,6 +95,9 @@ func FuzzMessageJSON(f *testing.F) {
 	f.Add([]byte(`{"type":"eof"}`))
 	f.Add([]byte(`{}`))
 	f.Add([]byte(`invalid json`))
+	f.Add([]byte(`{"type":"result","stop_reason":"end_turn","usage":{"input_tokens":100,"output_tokens":50,"cache_read_tokens":25}}`))
+	f.Add([]byte(`{"type":"result","usage":{"cost_usd":0.0042}}`))
+	f.Add([]byte(`{"type":"error","error_code":"rate_limit","content":"too many requests"}`))
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		var msg Message
