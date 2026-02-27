@@ -248,15 +248,15 @@ func parseUsage(raw map[string]any) *agentrun.Usage {
 		return nil
 	}
 
-	input := jsonutil.GetInt(usage, "input_tokens") + jsonutil.GetInt(usage, "cached_input_tokens")
-	output := jsonutil.GetInt(usage, "output_tokens")
-	if input == 0 && output == 0 {
+	u := &agentrun.Usage{
+		InputTokens:     jsonutil.GetInt(usage, "input_tokens"),
+		OutputTokens:    jsonutil.GetInt(usage, "output_tokens"),
+		CacheReadTokens: jsonutil.GetInt(usage, "cached_input_tokens"),
+	}
+	if u.InputTokens == 0 && u.OutputTokens == 0 && u.CacheReadTokens == 0 {
 		return nil
 	}
-	return &agentrun.Usage{
-		InputTokens:  input,
-		OutputTokens: output,
-	}
+	return u
 }
 
 // marshalString converts a string to json.RawMessage.

@@ -304,6 +304,8 @@ func (p *process) scanLines(ctx context.Context, stdout io.ReadCloser) error {
 	initCap := min(4096, p.opts.ScannerBuffer)
 	scanner.Buffer(make([]byte, 0, initCap), p.opts.ScannerBuffer)
 
+	var lastStopReason agentrun.StopReason
+
 	for scanner.Scan() {
 		line := scanner.Text()
 		msg, err := p.backend.ParseLine(line)
@@ -320,6 +322,8 @@ func (p *process) scanLines(ctx context.Context, stdout io.ReadCloser) error {
 			msg.Timestamp = time.Now()
 		}
 
+		lastStopReason = applyStopReasonCarryForward(&msg, lastStopReason)
+
 		select {
 		case p.output <- msg:
 		case <-ctx.Done():
@@ -327,6 +331,38 @@ func (p *process) scanLines(ctx context.Context, stdout io.ReadCloser) error {
 		}
 	}
 	return scanner.Err()
+}
+
+// applyStopReasonCarryForward implements StopReason carry-forward between
+// parsed messages. Claude CLI's result.stop_reason is always null in streaming
+// mode; the real stop_reason arrives earlier in message_delta stream events.
+// This function captures it and applies it to the next MessageResult.
+//
+// Returns the updated lastStopReason for the next call.
+func applyStopReasonCarryForward(msg *agentrun.Message, last agentrun.StopReason) agentrun.StopReason {
+	// Clear stale carry-forward on new turn (streaming mode: scanLines
+	// spans the entire subprocess lifetime).
+	if msg.Type == agentrun.MessageInit {
+		return ""
+	}
+
+	// Capture StopReason from non-result messages (e.g., message_delta).
+	if msg.StopReason != "" && msg.Type != agentrun.MessageResult {
+		captured := msg.StopReason
+		msg.StopReason = "" // don't leak to consumer on the system message
+		return captured
+	}
+
+	// Apply carried StopReason to result messages only when the result
+	// itself has no StopReason (avoid clobbering authoritative values).
+	if msg.Type == agentrun.MessageResult {
+		if msg.StopReason == "" && last != "" {
+			msg.StopReason = last
+		}
+		return "" // always clear on result
+	}
+
+	return last
 }
 
 // replaceSubprocess performs the Resumer subprocess-replacement pattern.

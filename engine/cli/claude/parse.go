@@ -3,12 +3,14 @@ package claude
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"unicode"
 
 	"github.com/dmora/agentrun"
 	"github.com/dmora/agentrun/engine/cli"
 	"github.com/dmora/agentrun/engine/cli/internal/jsonutil"
+	"github.com/dmora/agentrun/engine/internal/stoputil"
 )
 
 // ParseLine parses a single line of Claude's stream-json output into a Message.
@@ -175,6 +177,11 @@ func parseResultMessage(raw map[string]any, msg *agentrun.Message) {
 		msg.Content = result
 	}
 	msg.Usage = extractTokenUsage(raw)
+	// Extract stop_reason directly from result event (may be null/empty
+	// in streaming mode, but populated in non-streaming or future CLI versions).
+	if sr := jsonutil.GetString(raw, "stop_reason"); sr != "" {
+		msg.StopReason = stoputil.Sanitize(sr)
+	}
 }
 
 // parseErrorMessage handles "error" events.
@@ -204,14 +211,25 @@ func parseStreamEvent(raw map[string]any, msg *agentrun.Message) {
 		return
 	}
 
-	switch jsonutil.GetString(event, "type") {
+	eventType := jsonutil.GetString(event, "type")
+	switch eventType {
 	case "content_block_delta":
 		parseContentBlockDelta(event, msg)
+	case "message_delta":
+		msg.Type = agentrun.MessageSystem
+		msg.Content = "stream_event: message_delta"
+		// Extract stop_reason from delta and set on this message.
+		// The engine readLoop carries it forward to the next MessageResult.
+		if delta, ok := event["delta"].(map[string]any); ok {
+			if sr := jsonutil.GetString(delta, "stop_reason"); sr != "" {
+				msg.StopReason = stoputil.Sanitize(sr)
+			}
+		}
 	default:
 		// message_start, content_block_start, content_block_stop,
-		// message_stop, message_delta — all lifecycle events.
+		// message_stop — all lifecycle events.
 		msg.Type = agentrun.MessageSystem
-		msg.Content = "stream_event: " + jsonutil.GetString(event, "type")
+		msg.Content = "stream_event: " + eventType
 	}
 }
 
@@ -244,22 +262,38 @@ func parseContentBlockDelta(event map[string]any, msg *agentrun.Message) {
 	}
 }
 
-// extractTokenUsage extracts input/output token counts from a source map.
-// Returns nil if no meaningful usage data is present (not &Usage{0,0}).
+// extractTokenUsage extracts token usage from a source map.
+// Returns nil if no meaningful usage data is present (all fields zero).
+//
+// Token counts come from the "usage" sub-object. Cost comes from the source
+// root (result events have total_cost_usd at top level, not inside usage).
 func extractTokenUsage(source map[string]any) *agentrun.Usage {
-	usage, ok := source["usage"].(map[string]any)
-	if !ok {
+	u := &agentrun.Usage{}
+
+	// Token counts come from the "usage" sub-object (may be absent).
+	if usage, ok := source["usage"].(map[string]any); ok {
+		u.InputTokens = jsonutil.GetInt(usage, "input_tokens")
+		u.OutputTokens = jsonutil.GetInt(usage, "output_tokens")
+		u.CacheReadTokens = jsonutil.GetInt(usage, "cache_read_input_tokens")
+		u.CacheWriteTokens = jsonutil.GetInt(usage, "cache_creation_input_tokens")
+		u.ThinkingTokens = jsonutil.GetInt(usage, "thinking_tokens")
+	}
+
+	// Cost lives at the source level (result event), not inside usage.
+	// Parsed independently so cost is captured even if "usage" is absent.
+	cost := jsonutil.GetFloat(source, "total_cost_usd")
+	if math.IsInf(cost, 0) || math.IsNaN(cost) || cost < 0 {
+		cost = 0
+	}
+	u.CostUSD = cost
+
+	// Return nil only when ALL fields are zero (nothing reported).
+	if u.InputTokens == 0 && u.OutputTokens == 0 &&
+		u.CacheReadTokens == 0 && u.CacheWriteTokens == 0 &&
+		u.ThinkingTokens == 0 && u.CostUSD == 0 {
 		return nil
 	}
-	inputTokens := jsonutil.GetInt(usage, "input_tokens")
-	outputTokens := jsonutil.GetInt(usage, "output_tokens")
-	if inputTokens == 0 && outputTokens == 0 {
-		return nil
-	}
-	return &agentrun.Usage{
-		InputTokens:  inputTokens,
-		OutputTokens: outputTokens,
-	}
+	return u
 }
 
 // sanitizeUnknownType converts an unknown type string to a MessageType.

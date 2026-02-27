@@ -271,8 +271,15 @@ func parseSessionInfoUpdate(update json.RawMessage) *agentrun.Message {
 	return &msg
 }
 
+// parseUsageUpdate silently consumes incremental context-window usage notifications.
+//
+// Per-turn token usage (for cost tracking) is surfaced via handlePromptResult
+// (promptResult.Usage → Message.Usage on MessageResult). This function handles
+// a different signal: context window fill level (size/used), which is not yet
+// surfaced. Defer accumulation until an orchestrator use case requires it.
+//
+// See also: handlePromptResult in process.go (authoritative turn-level usage).
 func parseUsageUpdate(_ json.RawMessage) *agentrun.Message {
-	// Silent accumulation — no message emitted.
 	return nil
 }
 

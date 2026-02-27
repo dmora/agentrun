@@ -691,6 +691,177 @@ func TestParseLine_StreamEventInvalidDelta(t *testing.T) {
 	}
 }
 
+// --- Cache tokens + cost + StopReason tests ---
+
+func TestParseLine_ResultWithCacheTokens(t *testing.T) {
+	b := New()
+	line := `{"type":"result","result":"done","usage":{"input_tokens":500,"output_tokens":200,"cache_read_input_tokens":100,"cache_creation_input_tokens":50}}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Usage == nil {
+		t.Fatal("usage should be populated")
+	}
+	if msg.Usage.CacheReadTokens != 100 {
+		t.Errorf("CacheReadTokens = %d, want 100", msg.Usage.CacheReadTokens)
+	}
+	if msg.Usage.CacheWriteTokens != 50 {
+		t.Errorf("CacheWriteTokens = %d, want 50", msg.Usage.CacheWriteTokens)
+	}
+}
+
+func TestParseLine_ResultWithCostUSD(t *testing.T) {
+	b := New()
+	line := `{"type":"result","result":"done","total_cost_usd":0.1181,"usage":{"input_tokens":500,"output_tokens":200}}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Usage == nil {
+		t.Fatal("usage should be populated")
+	}
+	if msg.Usage.CostUSD != 0.1181 {
+		t.Errorf("CostUSD = %f, want 0.1181", msg.Usage.CostUSD)
+	}
+}
+
+func TestParseLine_ResultCacheOnlyNoInputOutput(t *testing.T) {
+	b := New()
+	line := `{"type":"result","result":"done","usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":5}}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Usage == nil {
+		t.Fatal("usage should be non-nil when cache tokens present")
+	}
+	if msg.Usage.CacheReadTokens != 5 {
+		t.Errorf("CacheReadTokens = %d, want 5", msg.Usage.CacheReadTokens)
+	}
+}
+
+func TestParseLine_ResultWithThinkingTokens(t *testing.T) {
+	b := New()
+	line := `{"type":"result","result":"done","usage":{"input_tokens":500,"output_tokens":200,"thinking_tokens":150}}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Usage == nil {
+		t.Fatal("usage should be populated")
+	}
+	if msg.Usage.ThinkingTokens != 150 {
+		t.Errorf("ThinkingTokens = %d, want 150", msg.Usage.ThinkingTokens)
+	}
+}
+
+func TestParseLine_ResultThinkingOnlyNoInputOutput(t *testing.T) {
+	b := New()
+	// Nil-guard boundary: only thinking tokens present — Usage should be non-nil.
+	line := `{"type":"result","result":"done","usage":{"input_tokens":0,"output_tokens":0,"thinking_tokens":42}}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Usage == nil {
+		t.Fatal("usage should be non-nil when thinking tokens present")
+	}
+	if msg.Usage.ThinkingTokens != 42 {
+		t.Errorf("ThinkingTokens = %d, want 42", msg.Usage.ThinkingTokens)
+	}
+}
+
+func TestParseLine_ResultCostOnlyNoTokens(t *testing.T) {
+	b := New()
+	line := `{"type":"result","result":"done","total_cost_usd":0.05,"usage":{"input_tokens":0,"output_tokens":0}}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Usage == nil {
+		t.Fatal("usage should be non-nil when cost present")
+	}
+	if msg.Usage.CostUSD != 0.05 {
+		t.Errorf("CostUSD = %f, want 0.05", msg.Usage.CostUSD)
+	}
+}
+
+func TestParseLine_ResultCostWithoutUsageObject(t *testing.T) {
+	b := New()
+	// total_cost_usd present at root but no "usage" sub-object — cost must
+	// still be captured (not silently dropped by early return).
+	line := `{"type":"result","result":"done","total_cost_usd":0.11}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Usage == nil {
+		t.Fatal("usage should be non-nil when cost present without usage object")
+	}
+	if msg.Usage.CostUSD != 0.11 {
+		t.Errorf("CostUSD = %f, want 0.11", msg.Usage.CostUSD)
+	}
+	if msg.Usage.InputTokens != 0 {
+		t.Errorf("InputTokens = %d, want 0", msg.Usage.InputTokens)
+	}
+}
+
+func TestParseLine_ResultCostNaN(t *testing.T) {
+	b := New()
+	// NaN is not valid JSON, but test the extraction path via a zero result.
+	// Since json.Unmarshal can't produce NaN from valid JSON, this tests
+	// that zero cost + zero tokens → nil usage (no false positive).
+	line := `{"type":"result","result":"done","usage":{"input_tokens":0,"output_tokens":0}}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Usage != nil {
+		t.Errorf("usage should be nil when all fields zero, got %+v", msg.Usage)
+	}
+}
+
+func TestParseLine_ResultCostNegative(t *testing.T) {
+	b := New()
+	line := `{"type":"result","result":"done","total_cost_usd":-1.5,"usage":{"input_tokens":0,"output_tokens":0}}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Negative cost sanitized to 0, all tokens zero → nil usage.
+	if msg.Usage != nil {
+		t.Errorf("usage should be nil when cost is negative (sanitized), got %+v", msg.Usage)
+	}
+}
+
+func TestParseLine_MessageDeltaStopReason(t *testing.T) {
+	b := New()
+	line := `{"type":"stream_event","event":{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Type != agentrun.MessageSystem {
+		t.Errorf("type = %q, want %q", msg.Type, agentrun.MessageSystem)
+	}
+	if msg.StopReason != agentrun.StopEndTurn {
+		t.Errorf("StopReason = %q, want %q", msg.StopReason, agentrun.StopEndTurn)
+	}
+}
+
+func TestParseLine_ResultWithStopReason(t *testing.T) {
+	b := New()
+	line := `{"type":"result","result":"done","stop_reason":"max_tokens","usage":{"input_tokens":100,"output_tokens":50}}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.StopReason != agentrun.StopMaxTokens {
+		t.Errorf("StopReason = %q, want %q", msg.StopReason, agentrun.StopMaxTokens)
+	}
+}
+
 // --- Fuzz test ---
 
 func FuzzParseLine(f *testing.F) {

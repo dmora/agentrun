@@ -70,6 +70,8 @@ agentrun (interfaces)
 │   ├── claude/          ← Claude Code backend
 │   ├── codex/           ← Codex CLI backend
 │   └── opencode/        ← OpenCode backend
+├── engine/internal/     ← Shared helpers across all engine types (not importable by consumers)
+│   └── stoputil/        ← StopReason sanitization (control char rejection, length truncation)
 ├── engine/acp/          ← ACP engine: JSON-RPC 2.0 persistent subprocess
 │   ├── conn.go          ← Bidirectional JSON-RPC 2.0 Conn (platform-agnostic)
 │   ├── protocol.go      ← ACP method constants + request/response types
@@ -96,6 +98,7 @@ agentrun (interfaces)
 | `engine/cli/internal/errfmt` | Shared error formatting for CLI parsers |
 | `engine/cli/internal/jsonutil` | Shared JSON extraction helpers (GetString, GetInt, GetMap, ContainsNull) |
 | `engine/cli/internal/optutil` | Shared option resolution + validation (RootOptionsSet, ValidateModeHITL) |
+| `engine/internal/stoputil` | Shared StopReason sanitization (control char rejection, rune-safe truncation) — used by CLI and ACP engines |
 | `engine/acp` | ACP engine: JSON-RPC 2.0 persistent subprocess, multi-turn without MCP cold boot |
 | `engine/api/adk` | Google ADK API engine |
 | `enginetest` | Namespace for compliance test suites (reserved for future root Engine/Process compliance) |
@@ -120,3 +123,8 @@ agentrun (interfaces)
 - **OptionAddDirs**: Newline-separated absolute paths for additional directory access. Backends apply `filepath.IsAbs` + leading-dash guard per entry. Supported by Claude (`--add-dir`) and Codex (`--add-dir`); OpenCode silently ignores.
 - **RunTurn helper**: `runturn.go` encapsulates concurrent Send+drain pattern. Callers must provide a context with deadline/timeout. Safe for all engine types.
 - **Shared test infrastructure**: `testutil_test.go` contains `mockProcess` — shared across root-package test files.
+- **Usage omitempty semantics**: Existing fields (`InputTokens`, `OutputTokens`) use bare `int` (always serialized, 0 = zero tokens). New fields (`CacheReadTokens`, `CacheWriteTokens`, `ThinkingTokens`, `CostUSD`) use `omitempty` (0 = not reported by this backend). Asymmetry is intentional and documented per-field in godoc. Nil-guard in `extractTokenUsage` checks ALL fields atomically.
+- **StopReason type**: Output vocabulary (open set, no `Valid()` method). Only 3 universal constants in root (`StopEndTurn`, `StopMaxTokens`, `StopToolUse`). Backend-specific values pass through as raw strings. Consumers should handle unknown values gracefully.
+- **StopReason carry-forward**: Claude CLI `result.stop_reason` is null in streaming mode. Real stop_reason arrives in `message_delta` events. Engine readLoop carries it forward via goroutine-local variable (`applyStopReasonCarryForward` in `engine/cli/process.go`). Init resets stale state, result applies (no clobber). Backend stays stateless.
+- **CostUSD**: `float64` matching Claude CLI wire format. Parsers must sanitize NaN/Inf/negative to zero before populating. Documented as approximate (not for billing reconciliation). Pragmatic exception to "2+ backends" rule — cost tracking is a universal orchestrator need.
+- **ErrorCode**: Machine-readable error code on `MessageError`. Format is backend-specific (CLI: string codes like `"rate_limit"`, ACP: stringified JSON-RPC codes). Human-readable description stays in `Content`. **Phase B — field exists but parsers do not populate it yet.**
