@@ -40,6 +40,9 @@ func (b *Backend) ParseLine(line string) (agentrun.Message, error) {
 	case "init":
 		msg.Type = agentrun.MessageInit
 		msg.ResumeID = jsonutil.GetString(raw, "session_id")
+		if model := errfmt.SanitizeCode(jsonutil.GetString(raw, "model")); model != "" {
+			msg.Init = &agentrun.InitMeta{Model: model}
+		}
 	case "assistant":
 		parseAssistantMessage(raw, &msg)
 	case "tool":
@@ -65,6 +68,9 @@ func parseSystemMessage(raw map[string]any, msg *agentrun.Message) {
 	if subtype == "init" {
 		msg.Type = agentrun.MessageInit
 		msg.ResumeID = jsonutil.GetString(raw, "session_id")
+		if model := errfmt.SanitizeCode(jsonutil.GetString(raw, "model")); model != "" {
+			msg.Init = &agentrun.InitMeta{Model: model}
+		}
 		return
 	}
 	msg.Type = agentrun.MessageSystem

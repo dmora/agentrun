@@ -9,24 +9,7 @@ paths:
 
 # Design Philosophy: Root is Language, Backends are Dialect
 
-When adding or modifying constants, types, or options, apply this decision rule:
-
-> **Would this concept exist if backend X didn't exist?**
-> - **Yes** → it belongs in the root `agentrun` package.
-> - **No** → it belongs in the backend package (e.g., `engine/cli/claude/`).
-
-## Quick Reference
-
-**Root (shared vocabulary):**
-- `MessageType` constants — output vocabulary (what agents say)
-- `Option*` constants — input vocabulary (what you ask of agents)
-- `Mode`, `HITL` types — cross-cutting session controls
-- `Session.Model`, `Session.Prompt` — structural config
-
-**Backend (dialect):**
-- Wire format mapping (CLI flags, API bodies)
-- Backend-specific options (`OptionPermissionMode`)
-- Backend-specific permission/mode constants
+See CLAUDE.md "Design Philosophy" section for the full decision rule and examples.
 
 ## Anti-Patterns
 

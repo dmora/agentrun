@@ -32,6 +32,10 @@ func TestParseLine_StepStart_First(t *testing.T) {
 	if b.SessionID() != testValidSessionID {
 		t.Errorf("SessionID() = %q, want stored", b.SessionID())
 	}
+	// OpenCode has no model/agent info on init — Init must be nil.
+	if msg.Init != nil {
+		t.Errorf("Init = %+v, want nil (OpenCode has no init metadata)", msg.Init)
+	}
 }
 
 func TestParseLine_StepStart_Subsequent(t *testing.T) {

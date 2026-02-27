@@ -240,7 +240,7 @@ func TestMessageJSON_Minimal(t *testing.T) {
 		t.Error("type field should be present")
 	}
 	// Timestamp is always present (time.Time is not omitempty-compatible).
-	for _, key := range []string{"content", "tool", "usage", "stop_reason", "error_code", "resume_id", "raw"} {
+	for _, key := range []string{"content", "tool", "usage", "stop_reason", "error_code", "resume_id", "init", "raw"} {
 		if _, ok := raw[key]; ok {
 			t.Errorf("field %q should be omitted on minimal message", key)
 		}
@@ -570,5 +570,83 @@ func TestStopReasonConstants(t *testing.T) {
 				t.Errorf("StopReason = %q, want %q", tt.sr, tt.want)
 			}
 		})
+	}
+}
+
+// --- InitMeta JSON tests ---
+
+func TestInitMeta_JSON_RoundTrip(t *testing.T) {
+	meta := InitMeta{
+		Model:        "claude-sonnet-4-5-20250514",
+		AgentName:    "opencode",
+		AgentVersion: "1.2.3",
+	}
+	data, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got InitMeta
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got != meta {
+		t.Errorf("round-trip mismatch: got %+v, want %+v", got, meta)
+	}
+}
+
+func TestInitMeta_JSON_OmitemptyFields(t *testing.T) {
+	meta := InitMeta{Model: "claude"}
+	data, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, ok := raw["model"]; !ok {
+		t.Error("model should be present")
+	}
+	for _, key := range []string{"agent_name", "agent_version"} {
+		if _, ok := raw[key]; ok {
+			t.Errorf("field %q should be omitted when empty", key)
+		}
+	}
+}
+
+func TestMessageJSON_WithInit(t *testing.T) {
+	msg := Message{
+		Type:     MessageInit,
+		ResumeID: "ses_abc",
+		Init:     &InitMeta{Model: "claude-sonnet-4-5-20250514"},
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got Message
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Init == nil {
+		t.Fatal("Init should be populated")
+	}
+	if got.Init.Model != "claude-sonnet-4-5-20250514" {
+		t.Errorf("Init.Model = %q, want %q", got.Init.Model, "claude-sonnet-4-5-20250514")
+	}
+}
+
+func TestMessageJSON_NilInit(t *testing.T) {
+	msg := Message{Type: MessageInit, ResumeID: "ses_abc"}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, ok := raw["init"]; ok {
+		t.Error("init field should be omitted when nil")
 	}
 }

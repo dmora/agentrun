@@ -127,6 +127,11 @@ type Message struct {
 	// Empty means the backend could not capture a session ID.
 	ResumeID string `json:"resume_id,omitempty"`
 
+	// Init carries metadata from the agent's initialization handshake.
+	// Set exclusively on MessageInit messages. Nil on all other types.
+	// Only non-nil when at least one field contains meaningful data.
+	Init *InitMeta `json:"init,omitempty"`
+
 	// Raw is the original unparsed JSON from the backend.
 	// Backends populate this for pass-through or debugging.
 	Raw json.RawMessage `json:"raw,omitempty"`
@@ -207,4 +212,35 @@ type Usage struct {
 	// Omitted when zero (0 means not reported by this backend).
 	// Set on MessageContextWindow messages (ACP usage_update).
 	ContextUsedTokens int `json:"context_used_tokens,omitempty"`
+}
+
+// InitMeta carries metadata from the agent's initialization handshake.
+// Set exclusively on MessageInit messages. Nil on all other message types.
+//
+// Not all backends populate every field — AgentName and AgentVersion are
+// currently only populated by ACP backends. Consumers should check
+// individual fields rather than assuming non-nil InitMeta means all
+// fields are present.
+//
+// Nil-guard contract: backends only set Init when at least one field is
+// non-empty. A non-nil InitMeta always has meaningful data.
+type InitMeta struct {
+	// Model is the model identifier reported by the backend at session start.
+	// Reflects the agent's reported model during handshake; may differ from
+	// the active model if the caller overrides via Session.Model.
+	// Empty means the backend did not report a model on init.
+	// Sanitized: control chars rejected, truncated to 128 bytes at parse time.
+	Model string `json:"model,omitempty"`
+
+	// AgentName is the agent implementation's name (e.g., "opencode", "claude-code").
+	// Empty means the backend did not report an agent name.
+	// Currently populated by ACP backends only.
+	// Sanitized: control chars rejected, truncated to 128 bytes at parse time.
+	AgentName string `json:"agent_name,omitempty"`
+
+	// AgentVersion is the agent implementation's version string.
+	// Empty means the backend did not report a version.
+	// Currently populated by ACP backends only.
+	// Sanitized: control chars rejected, truncated to 128 bytes at parse time.
+	AgentVersion string `json:"agent_version,omitempty"`
 }
