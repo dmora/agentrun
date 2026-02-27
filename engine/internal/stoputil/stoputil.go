@@ -22,11 +22,12 @@ func Sanitize(raw string) agentrun.StopReason {
 		}
 	}
 	if len(raw) > MaxLen {
-		s := raw[:MaxLen]
-		for !utf8.ValidString(s) {
-			s = s[:len(s)-1]
+		// Backtrack to the start of the last rune to ensure valid UTF-8.
+		end := MaxLen
+		for end > 0 && !utf8.RuneStart(raw[end]) {
+			end--
 		}
-		return agentrun.StopReason(s)
+		return agentrun.StopReason(raw[:end])
 	}
 	return agentrun.StopReason(raw)
 }
