@@ -9,6 +9,7 @@ import (
 
 	"github.com/dmora/agentrun"
 	"github.com/dmora/agentrun/engine/cli"
+	"github.com/dmora/agentrun/engine/internal/errfmt"
 )
 
 // --- ParseLine tests ---
@@ -471,8 +472,11 @@ func TestParseLine_ErrorWithCode(t *testing.T) {
 	if msg.Type != agentrun.MessageError {
 		t.Errorf("type = %q, want %q", msg.Type, agentrun.MessageError)
 	}
-	if msg.Content != "rate_limit: Too many requests" {
-		t.Errorf("content = %q, want %q", msg.Content, "rate_limit: Too many requests")
+	if msg.ErrorCode != "rate_limit" {
+		t.Errorf("ErrorCode = %q, want %q", msg.ErrorCode, "rate_limit")
+	}
+	if msg.Content != "Too many requests" {
+		t.Errorf("content = %q, want %q", msg.Content, "Too many requests")
 	}
 	assertRawPopulated(t, msg)
 }
@@ -486,6 +490,34 @@ func TestParseLine_ErrorStringFallback(t *testing.T) {
 	}
 	if msg.Content != "something went wrong" {
 		t.Errorf("content = %q, want %q", msg.Content, "something went wrong")
+	}
+	if msg.ErrorCode != "" {
+		t.Errorf("ErrorCode = %q, want empty", msg.ErrorCode)
+	}
+}
+
+func TestParseLine_ErrorLongMessage(t *testing.T) {
+	b := New()
+	longMsg := strings.Repeat("x", errfmt.MaxLen+500)
+	line := `{"type":"error","code":"E","message":"` + longMsg + `"}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msg.Content) > errfmt.MaxLen {
+		t.Errorf("Content length = %d, want <= %d", len(msg.Content), errfmt.MaxLen)
+	}
+}
+
+func TestParseLine_ErrorControlCharCode(t *testing.T) {
+	b := New()
+	line := `{"type":"error","code":"\u0000rate_limit","message":"Too many requests"}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.ErrorCode != "" {
+		t.Errorf("ErrorCode = %q, want empty (control char rejection)", msg.ErrorCode)
 	}
 }
 

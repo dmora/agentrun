@@ -10,7 +10,7 @@ import (
 
 	"github.com/dmora/agentrun"
 	"github.com/dmora/agentrun/engine/cli"
-	"github.com/dmora/agentrun/engine/cli/internal/errfmt"
+	"github.com/dmora/agentrun/engine/internal/errfmt"
 )
 
 const testValidSessionID = "ses_abcdefghij1234567890"
@@ -286,8 +286,11 @@ func TestParseLine_Error(t *testing.T) {
 	if msg.Type != agentrun.MessageError {
 		t.Errorf("Type = %q, want %q", msg.Type, agentrun.MessageError)
 	}
-	if msg.Content != "APIError: rate limited" {
-		t.Errorf("Content = %q, want %q", msg.Content, "APIError: rate limited")
+	if msg.ErrorCode != "APIError" {
+		t.Errorf("ErrorCode = %q, want %q", msg.ErrorCode, "APIError")
+	}
+	if msg.Content != "rate limited" {
+		t.Errorf("Content = %q, want %q", msg.Content, "rate limited")
 	}
 }
 
@@ -303,6 +306,9 @@ func TestParseLine_Error_NilErrorObject(t *testing.T) {
 	if msg.Content != "unknown error" {
 		t.Errorf("Content = %q, want %q", msg.Content, "unknown error")
 	}
+	if msg.ErrorCode != "" {
+		t.Errorf("ErrorCode = %q, want empty", msg.ErrorCode)
+	}
 }
 
 func TestParseLine_Error_FallbackMessage(t *testing.T) {
@@ -311,8 +317,11 @@ func TestParseLine_Error_FallbackMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if msg.Content != "InternalError: something broke" {
-		t.Errorf("Content = %q, want %q", msg.Content, "InternalError: something broke")
+	if msg.ErrorCode != "InternalError" {
+		t.Errorf("ErrorCode = %q, want %q", msg.ErrorCode, "InternalError")
+	}
+	if msg.Content != "something broke" {
+		t.Errorf("Content = %q, want %q", msg.Content, "something broke")
 	}
 }
 
@@ -326,6 +335,17 @@ func TestParseLine_Error_LongMessage(t *testing.T) {
 	}
 	if len(msg.Content) > errfmt.MaxLen {
 		t.Errorf("Content length = %d, want <= %d", len(msg.Content), errfmt.MaxLen)
+	}
+}
+
+func TestParseLine_Error_ControlCharCode(t *testing.T) {
+	b := New()
+	msg, err := b.ParseLine(`{"type":"error","timestamp":1700000000000,"error":{"name":"\u0000APIError","data":{"message":"rate limited"}}}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.ErrorCode != "" {
+		t.Errorf("ErrorCode = %q, want empty (control char rejection)", msg.ErrorCode)
 	}
 }
 

@@ -2,9 +2,12 @@ package acp
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/dmora/agentrun"
+	"github.com/dmora/agentrun/engine/internal/errfmt"
 )
 
 // assertMessage checks Type, Content, and Timestamp of a parsed update.
@@ -94,6 +97,9 @@ func TestParseSessionUpdate_ToolCallUpdate(t *testing.T) {
 		update := `{"sessionUpdate":"tool_call_update","toolCallId":"call_001","title":"Write file","status":"failed"}`
 		msg := parseSessionUpdate(json.RawMessage(update))
 		assertMessage(t, msg, agentrun.MessageError, "tool_call failed: Write file")
+		if msg.ErrorCode != "tool_call_failed" {
+			t.Errorf("ErrorCode = %q, want %q", msg.ErrorCode, "tool_call_failed")
+		}
 	})
 
 	t.Run("in_progress", func(t *testing.T) {
@@ -222,6 +228,24 @@ func TestParseSessionUpdate_MalformedData(t *testing.T) {
 				t.Errorf("type = %q, want %q", msg.Type, tt.wantType)
 			}
 		})
+	}
+}
+
+func TestUnmarshalError_Truncation(t *testing.T) {
+	// Call unmarshalError directly with an error whose message exceeds MaxLen.
+	longErr := fmt.Errorf("fail: %s", strings.Repeat("x", errfmt.MaxLen+500))
+	msg := unmarshalError("test_type", longErr)
+	if msg == nil {
+		t.Fatal("expected non-nil message")
+	}
+	if msg.Type != agentrun.MessageError {
+		t.Errorf("type = %q, want %q", msg.Type, agentrun.MessageError)
+	}
+	if len(msg.Content) > errfmt.MaxLen {
+		t.Errorf("Content length = %d, want <= %d", len(msg.Content), errfmt.MaxLen)
+	}
+	if msg.Timestamp.IsZero() {
+		t.Error("timestamp should be set")
 	}
 }
 

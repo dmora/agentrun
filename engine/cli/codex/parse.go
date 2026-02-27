@@ -9,8 +9,8 @@ import (
 
 	"github.com/dmora/agentrun"
 	"github.com/dmora/agentrun/engine/cli"
-	"github.com/dmora/agentrun/engine/cli/internal/errfmt"
 	"github.com/dmora/agentrun/engine/cli/internal/jsonutil"
+	"github.com/dmora/agentrun/engine/internal/errfmt"
 )
 
 // validUUID matches UUID format (any version, case-insensitive).
@@ -172,6 +172,7 @@ func parseCommandExecution(item map[string]any, msg *agentrun.Message) {
 // parseItemError handles item.completed/error → MessageError.
 func parseItemError(item map[string]any, msg *agentrun.Message) {
 	msg.Type = agentrun.MessageError
+	msg.ErrorCode = errfmt.SanitizeCode(jsonutil.GetString(item, "code"))
 	message := jsonutil.GetString(item, "message")
 	if message == "" {
 		message = jsonutil.GetString(item, "text")
@@ -179,8 +180,7 @@ func parseItemError(item map[string]any, msg *agentrun.Message) {
 	if message == "" {
 		message = "unknown error"
 	}
-	code := jsonutil.GetString(item, "code")
-	msg.Content = errfmt.Format(code, message)
+	msg.Content = errfmt.Truncate(message)
 }
 
 // parseGenericTool returns an itemParser that marshals the full item as Tool.Output.
@@ -225,19 +225,23 @@ func parseTurnFailed(raw map[string]any, msg *agentrun.Message) {
 		msg.Content = "turn failed"
 		return
 	}
-	code := jsonutil.GetString(errObj, "code")
+	msg.ErrorCode = errfmt.SanitizeCode(jsonutil.GetString(errObj, "code"))
 	message := jsonutil.GetString(errObj, "message")
-	msg.Content = errfmt.Format(code, message)
+	if message == "" {
+		message = "turn failed"
+	}
+	msg.Content = errfmt.Truncate(message)
 }
 
 // parseTopLevelError handles top-level "error" events.
 func parseTopLevelError(raw map[string]any, msg *agentrun.Message) {
 	msg.Type = agentrun.MessageError
+	msg.ErrorCode = errfmt.SanitizeCode(jsonutil.GetString(raw, "code"))
 	message := jsonutil.GetString(raw, "message")
 	if message == "" {
 		message = "unknown error"
 	}
-	msg.Content = errfmt.Format("", message)
+	msg.Content = errfmt.Truncate(message)
 }
 
 // parseUsage extracts token usage from turn.completed events.
