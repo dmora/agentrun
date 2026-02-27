@@ -32,6 +32,17 @@ const (
 	// Token usage and cost data are in Message.Usage.
 	MessageResult MessageType = "result"
 
+	// MessageContextWindow carries context window fill state emitted mid-turn.
+	// Contains window capacity and current fill level. Not all backends emit
+	// this type; it is currently produced by ACP's usage_update notification.
+	//
+	// Only ContextSizeTokens and ContextUsedTokens are meaningful on this
+	// message type. Other Usage fields (InputTokens, OutputTokens, CostUSD,
+	// etc.) are zero and should be ignored — they belong on MessageResult.
+	// Cost data is NOT included — CostUSD is authoritative only on
+	// MessageResult to avoid double-counting.
+	MessageContextWindow MessageType = "context_window"
+
 	// MessageEOF signals the end of the message stream.
 	MessageEOF MessageType = "eof"
 
@@ -186,4 +197,14 @@ type Usage struct {
 	// must sanitize NaN/Inf to zero before populating this field.
 	// Approximate — not suitable for billing reconciliation.
 	CostUSD float64 `json:"cost_usd,omitempty"`
+
+	// ContextSizeTokens is the total context window capacity in tokens.
+	// Omitted when zero (0 means not reported by this backend).
+	// Set on MessageContextWindow messages (ACP usage_update).
+	ContextSizeTokens int `json:"context_size_tokens,omitempty"`
+
+	// ContextUsedTokens is the current context window fill level in tokens.
+	// Omitted when zero (0 means not reported by this backend).
+	// Set on MessageContextWindow messages (ACP usage_update).
+	ContextUsedTokens int `json:"context_used_tokens,omitempty"`
 }

@@ -132,6 +132,9 @@ func (p *process) handlePromptResult(err error, result *promptResult) error {
 		StopReason: stoputil.Sanitize(result.StopReason),
 		Timestamp:  time.Now(),
 	}
+	// Turn-level token usage only — context window fields (ContextSizeTokens,
+	// ContextUsedTokens) are surfaced separately via parseUsageUpdate on
+	// MessageContextWindow messages.
 	if u := result.Usage; u != nil {
 		if u.InputTokens != 0 || u.OutputTokens != 0 ||
 			u.CachedReadTokens != 0 || u.CachedWriteTokens != 0 || u.ThoughtTokens != 0 {
@@ -290,8 +293,7 @@ func makeUpdateHandler(p *process, updateCh chan<- agentrun.Message) func(json.R
 		}
 		msg := parseSessionUpdate(notif.Update)
 		if msg == nil {
-			// Silent consumption (e.g. usage_update).
-			return
+			return // parser returned nil (no data to report)
 		}
 		select {
 		case updateCh <- *msg:

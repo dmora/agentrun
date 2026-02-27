@@ -31,11 +31,27 @@ func PrintMessage(msg agentrun.Message) {
 		printError(msg)
 	case agentrun.MessageToolResult:
 		fmt.Printf("[tool]    %s\n", msg.Tool.Name)
+	case agentrun.MessageContextWindow:
+		printContextWindow(msg)
 	case agentrun.MessageSystem, agentrun.MessageEOF:
 		// silent — system status and EOF are infrastructure signals
 	default:
 		fmt.Printf("[%s]  %s\n", msg.Type, msg.Content)
 	}
+}
+
+// printContextWindow prints context window fill state.
+func printContextWindow(msg agentrun.Message) {
+	if msg.Usage == nil {
+		return
+	}
+	u := msg.Usage
+	fmt.Printf("[context]  %d/%d tokens", u.ContextUsedTokens, u.ContextSizeTokens)
+	if u.ContextSizeTokens > 0 {
+		pct := float64(u.ContextUsedTokens) / float64(u.ContextSizeTokens) * 100
+		fmt.Printf(" (%.0f%%)", pct)
+	}
+	fmt.Println()
 }
 
 // printResultDetails prints StopReason and Usage details for result messages.
@@ -95,6 +111,9 @@ func printRawMetadata(msg agentrun.Message) {
 		}
 		if u.CostUSD > 0 {
 			fmt.Printf(" cost=$%.4f", u.CostUSD)
+		}
+		if u.ContextSizeTokens > 0 {
+			fmt.Printf(" ctx=%d/%d", u.ContextUsedTokens, u.ContextSizeTokens)
 		}
 		fmt.Println()
 	}

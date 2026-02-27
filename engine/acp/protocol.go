@@ -180,6 +180,15 @@ type acpUsage struct {
 	CachedWriteTokens int `json:"cachedWriteTokens,omitempty"`
 }
 
+// --- Usage Update ---
+
+// usageUpdate is the wire type for ACP usage_update notifications.
+// Wire field mapping: size → Usage.ContextSizeTokens, used → Usage.ContextUsedTokens.
+type usageUpdate struct {
+	Size int `json:"size"`
+	Used int `json:"used"`
+}
+
 // --- Updates (notifications from agent) ---
 
 // sessionNotification is the outer envelope for session/update notifications.
