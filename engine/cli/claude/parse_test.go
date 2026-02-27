@@ -135,6 +135,89 @@ func TestParseLine_StandaloneInit_NoSessionID(t *testing.T) {
 	}
 }
 
+// --- Init.Model tests ---
+
+func TestParseLine_StandaloneInit_WithModel(t *testing.T) {
+	b := New()
+	line := `{"type":"init","session_id":"xyz","model":"claude-sonnet-4-5-20250514"}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Init == nil {
+		t.Fatal("Init should be populated when model present")
+	}
+	if msg.Init.Model != "claude-sonnet-4-5-20250514" {
+		t.Errorf("Init.Model = %q, want %q", msg.Init.Model, "claude-sonnet-4-5-20250514")
+	}
+}
+
+func TestParseLine_SystemInit_WithModel(t *testing.T) {
+	b := New()
+	line := `{"type":"system","subtype":"init","session_id":"abc","model":"claude-sonnet-4-5-20250514"}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Init == nil {
+		t.Fatal("Init should be populated when model present")
+	}
+	if msg.Init.Model != "claude-sonnet-4-5-20250514" {
+		t.Errorf("Init.Model = %q, want %q", msg.Init.Model, "claude-sonnet-4-5-20250514")
+	}
+}
+
+func TestParseLine_StandaloneInit_NoModel(t *testing.T) {
+	b := New()
+	line := `{"type":"init","session_id":"xyz"}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Init != nil {
+		t.Errorf("Init should be nil when model absent, got %+v", msg.Init)
+	}
+}
+
+func TestParseLine_StandaloneInit_EmptyModel(t *testing.T) {
+	b := New()
+	line := `{"type":"init","session_id":"xyz","model":""}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Init != nil {
+		t.Errorf("Init should be nil when model is empty string, got %+v", msg.Init)
+	}
+}
+
+func TestParseLine_StandaloneInit_ControlCharsModel(t *testing.T) {
+	b := New()
+	line := `{"type":"init","session_id":"xyz","model":"bad\u0000model"}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Init != nil {
+		t.Errorf("Init should be nil when model has control chars, got %+v", msg.Init)
+	}
+}
+
+func TestParseLine_SystemInit_NoModel(t *testing.T) {
+	b := New()
+	line := `{"type":"system","subtype":"init","session_id":"abc"}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Type != agentrun.MessageInit {
+		t.Errorf("Type = %q, want %q", msg.Type, agentrun.MessageInit)
+	}
+	if msg.Init != nil {
+		t.Errorf("Init should be nil when no model, got %+v", msg.Init)
+	}
+}
+
 func TestParseLine_AssistantNestedContent(t *testing.T) {
 	b := New()
 	line := `{"type":"assistant","message":{"content":[{"type":"text","text":"Hello "},{"type":"text","text":"world"}]}}`

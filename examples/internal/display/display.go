@@ -5,6 +5,7 @@ package display
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/dmora/agentrun"
@@ -15,11 +16,7 @@ import (
 func PrintMessage(msg agentrun.Message) {
 	switch msg.Type {
 	case agentrun.MessageInit:
-		if msg.ResumeID != "" {
-			fmt.Printf("[init]    session ID: %s\n", msg.ResumeID)
-		} else {
-			fmt.Println("[init]    (session started)")
-		}
+		printInit(msg)
 	case agentrun.MessageThinking:
 		fmt.Printf("[think]   %s\n", msg.Content)
 	case agentrun.MessageText:
@@ -38,6 +35,38 @@ func PrintMessage(msg agentrun.Message) {
 	default:
 		fmt.Printf("[%s]  %s\n", msg.Type, msg.Content)
 	}
+}
+
+// printInit prints init metadata (model, agent identity) and session ID.
+func printInit(msg agentrun.Message) {
+	if s := formatInitMeta(msg.Init); s != "" {
+		fmt.Printf("[init]    %s\n", s)
+	}
+	if msg.ResumeID != "" {
+		fmt.Printf("[init]    session ID: %s\n", msg.ResumeID)
+	} else if msg.Init == nil {
+		fmt.Println("[init]    (session started)")
+	}
+}
+
+// formatInitMeta formats InitMeta fields into a display string.
+// Returns empty string when meta is nil or has no displayable fields.
+func formatInitMeta(meta *agentrun.InitMeta) string {
+	if meta == nil {
+		return ""
+	}
+	var parts []string
+	if meta.Model != "" {
+		parts = append(parts, "model:"+meta.Model)
+	}
+	if meta.AgentName != "" {
+		name := meta.AgentName
+		if meta.AgentVersion != "" {
+			name += "/" + meta.AgentVersion
+		}
+		parts = append(parts, name)
+	}
+	return strings.Join(parts, " ")
 }
 
 // printContextWindow prints context window fill state.
@@ -97,6 +126,9 @@ func PrintRaw(msg agentrun.Message) {
 
 // printRawMetadata prints ErrorCode, StopReason, Usage, and Raw when present.
 func printRawMetadata(msg agentrun.Message) {
+	if s := formatInitMeta(msg.Init); s != "" {
+		fmt.Printf("           init: %s\n", s)
+	}
 	if msg.ErrorCode != "" {
 		fmt.Printf("           error_code: %s\n", msg.ErrorCode)
 	}

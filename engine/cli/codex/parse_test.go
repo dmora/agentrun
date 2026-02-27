@@ -34,6 +34,10 @@ func TestParseLine_ThreadStarted_First(t *testing.T) {
 	if b.ThreadID() != testValidThreadID {
 		t.Errorf("ThreadID() = %q, want stored", b.ThreadID())
 	}
+	// Codex has no model/agent info on init — Init must be nil.
+	if msg.Init != nil {
+		t.Errorf("Init = %+v, want nil (Codex has no init metadata)", msg.Init)
+	}
 }
 
 func TestParseLine_ThreadStarted_Subsequent(t *testing.T) {

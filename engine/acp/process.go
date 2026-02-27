@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/dmora/agentrun"
+	"github.com/dmora/agentrun/engine/internal/errfmt"
 	"github.com/dmora/agentrun/engine/internal/stoputil"
 )
 
@@ -302,6 +303,36 @@ func makeUpdateHandler(p *process, updateCh chan<- agentrun.Message) func(json.R
 	}
 }
 
+// handshakeResult groups the outputs of openSession/resumeSession.
+// Avoids growing positional return values as new fields are threaded.
+type handshakeResult struct {
+	sessionID     string
+	modes         *sessionModeState
+	models        *sessionModelState
+	configOptions []sessionConfigOption
+}
+
+// buildInitMeta constructs InitMeta from initialize + session results.
+// Returns nil when no meaningful data is available (nil-guard contract).
+// Sanitizes all fields at construction time.
+func buildInitMeta(initResult *initializeResult, models *sessionModelState) *agentrun.InitMeta {
+	var meta agentrun.InitMeta
+
+	if initResult != nil && initResult.AgentInfo != nil {
+		meta.AgentName = errfmt.SanitizeCode(initResult.AgentInfo.Name)
+		meta.AgentVersion = errfmt.SanitizeCode(initResult.AgentInfo.Version)
+	}
+	if models != nil && models.CurrentModelID != "" {
+		meta.Model = errfmt.SanitizeCode(models.CurrentModelID)
+	}
+
+	// Nil-guard: only return non-nil when at least one field is set.
+	if meta.Model == "" && meta.AgentName == "" && meta.AgentVersion == "" {
+		return nil
+	}
+	return &meta
+}
+
 // handshake performs initialize + session/new (or session/load) and emits MessageInit.
 // After emitting MessageInit, applies session configuration (mode, model).
 func (p *process) handshake(ctx context.Context, session agentrun.Session) error {
@@ -317,43 +348,40 @@ func (p *process) handshake(ctx context.Context, session agentrun.Session) error
 	}
 
 	// Step 2: Session — resume existing or create new.
-	resumeID := session.Options[agentrun.OptionResumeID]
-	var sessionID string
-	var modes *sessionModeState
-	var configOptions []sessionConfigOption
+	var hr handshakeResult
 	var err error
-	if resumeID != "" {
-		sessionID, modes, configOptions, err = p.resumeSession(ctx, resumeID, session.CWD)
+	if resumeID := session.Options[agentrun.OptionResumeID]; resumeID != "" {
+		hr, err = p.resumeSession(ctx, resumeID, session.CWD)
 	} else {
-		sessionID, modes, configOptions, err = p.openSession(ctx, session)
+		hr, err = p.openSession(ctx, session)
 	}
 	if err != nil {
 		return err
 	}
 
 	// Validate and store session ID.
-	if err := validateSessionID(sessionID); err != nil {
+	if err := validateSessionID(hr.sessionID); err != nil {
 		return fmt.Errorf("acp: invalid session ID from agent: %w", err)
 	}
-	p.sessionID = sessionID
+	p.sessionID = hr.sessionID
 
 	// Step 3: Emit MessageInit (before config application — consumers need session ID).
 	p.emit(agentrun.Message{
 		Type:      agentrun.MessageInit,
 		ResumeID:  p.sessionID,
+		Init:      buildInitMeta(&initResult, hr.models),
 		Timestamp: time.Now(),
 	})
 
 	// Step 4: Apply session configuration.
-	return p.applySessionConfig(ctx, session, modes, configOptions)
+	return p.applySessionConfig(ctx, session, hr.modes, hr.configOptions)
 }
 
 // resumeSession loads an existing session by ID.
-// Returns the session ID (from resumeID, since LoadSessionResult has no sessionId),
-// along with modes and configOptions from the response.
-func (p *process) resumeSession(ctx context.Context, resumeID, cwd string) (string, *sessionModeState, []sessionConfigOption, error) {
+// Returns a handshakeResult (sessionID from resumeID, since LoadSessionResult has no sessionId).
+func (p *process) resumeSession(ctx context.Context, resumeID, cwd string) (handshakeResult, error) {
 	if err := validateSessionID(resumeID); err != nil {
-		return "", nil, nil, fmt.Errorf("%w: invalid resume ID: %w", agentrun.ErrSessionNotFound, err)
+		return handshakeResult{}, fmt.Errorf("%w: invalid resume ID: %w", agentrun.ErrSessionNotFound, err)
 	}
 	params := loadSessionParams{
 		SessionID:  resumeID,
@@ -362,23 +390,33 @@ func (p *process) resumeSession(ctx context.Context, resumeID, cwd string) (stri
 	}
 	var result loadSessionResult
 	if err := p.conn.Call(ctx, MethodSessionLoad, params, &result); err != nil {
-		return "", nil, nil, fmt.Errorf("%w: session/load: %w", agentrun.ErrSessionNotFound, err)
+		return handshakeResult{}, fmt.Errorf("%w: session/load: %w", agentrun.ErrSessionNotFound, err)
 	}
 	// LoadSessionResult has NO sessionId — use resumeID directly.
-	return resumeID, result.Modes, result.ConfigOptions, nil
+	return handshakeResult{
+		sessionID:     resumeID,
+		modes:         result.Modes,
+		models:        result.Models,
+		configOptions: result.ConfigOptions,
+	}, nil
 }
 
 // openSession creates a new session with the given configuration.
-func (p *process) openSession(ctx context.Context, session agentrun.Session) (string, *sessionModeState, []sessionConfigOption, error) {
+func (p *process) openSession(ctx context.Context, session agentrun.Session) (handshakeResult, error) {
 	params := newSessionParams{
 		CWD:        session.CWD,
 		MCPServers: []mcpServer{}, // empty slice, never nil
 	}
 	var result newSessionResult
 	if err := p.conn.Call(ctx, MethodSessionNew, params, &result); err != nil {
-		return "", nil, nil, fmt.Errorf("acp: session/new: %w", err)
+		return handshakeResult{}, fmt.Errorf("acp: session/new: %w", err)
 	}
-	return result.SessionID, result.Modes, result.ConfigOptions, nil
+	return handshakeResult{
+		sessionID:     result.SessionID,
+		modes:         result.Modes,
+		models:        result.Models,
+		configOptions: result.ConfigOptions,
+	}, nil
 }
 
 // sessionIDPattern matches safe session identifiers (relaxed to 256 for real agent IDs).

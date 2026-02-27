@@ -98,6 +98,9 @@ func FuzzMessageJSON(f *testing.F) {
 	f.Add([]byte(`{"type":"result","stop_reason":"end_turn","usage":{"input_tokens":100,"output_tokens":50,"cache_read_tokens":25}}`))
 	f.Add([]byte(`{"type":"result","usage":{"cost_usd":0.0042}}`))
 	f.Add([]byte(`{"type":"error","error_code":"rate_limit","content":"too many requests"}`))
+	f.Add([]byte(`{"type":"init","init":{"model":"claude-sonnet-4-5-20250514","agent_name":"opencode","agent_version":"1.2.3"}}`))
+	f.Add([]byte(`{"type":"init","init":{"model":"\u0000control\u001f chars"}}`))
+	f.Add([]byte(`{"type":"init","init":{}}`))
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		var msg Message
