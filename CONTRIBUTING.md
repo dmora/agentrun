@@ -91,17 +91,28 @@ Individual `RunSpawnerTests`, `RunParserTests`, and `RunResumerTests` are also e
 
 The root `agentrun` package and `engine/cli` package must have zero external dependencies. Only stdlib imports are allowed. Backend packages may import external libraries if absolutely necessary, but should prefer stdlib where possible.
 
-## Design Notes for Future Issues
+## Message Field Conventions
 
-The following feedback was captured during architecture review and should be addressed in subsequent issues:
+When adding new fields to `Message` or its nested types, follow these patterns:
 
-- `Process.Send()` may need to distinguish streaming vs resume-per-turn models (consider Sendable type-assertion or split) — #63
-- Server restart resilience requires a Recoverer interface for HandleInit/ParseInit duality — #64
-- Session may need TransportHint/StreamingMode for turn-boundary detection — #63
-- Backend self-registration pattern prevents reverse-engineering wiring — #65-67
-- HIPAA requires structured subprocess event logging (SessionEvent audit callback) — #63
-- CWD path validation (ValidateProjectPath) should be exported from parent — #65
-- Scanner buffer size should be configurable (dropped messages = patient safety issue) — #65
-- RecoverableEngine as optional interface keeps API engines clean — #63
-- CLIOptions typed struct prevents stringly-typed contract in Session.Options — #64
-- Subprocess test helpers (SIGTERM/SIGKILL lifecycle) could be added to enginetest as engine-level compliance suites
+### Nil-guard pointer fields
+
+Metadata structs (`*Usage`, `*InitMeta`, `*ProcessMeta`, `*ToolCall`) are pointer fields with `omitempty`. Only set them when at least one sub-field is meaningful — a non-nil pointer always carries real data:
+
+```go
+// Good: only set Usage when there's actual data.
+if inputTokens > 0 || outputTokens > 0 {
+    msg.Usage = &agentrun.Usage{InputTokens: inputTokens, OutputTokens: outputTokens}
+}
+
+// Bad: always allocating with zero values.
+msg.Usage = &agentrun.Usage{}
+```
+
+### Sanitization at parse time
+
+Structured metadata fields from wire data (`ErrorCode`, `StopReason`, `InitMeta.*`) must be sanitized at parse time via `errfmt.SanitizeCode` (control-char rejection, 128-byte cap). Free-form content (`Content`) is not sanitized — it carries assistant text verbatim. Engine-constructed values (`ProcessMeta.PID`, `ProcessMeta.Binary`) come from `exec.Cmd` and need no sanitization.
+
+### omitempty semantics
+
+Use bare types (always serialized) for primary fields that are meaningful at zero: `InputTokens`, `OutputTokens`. Use `omitempty` for optional fields where zero means "not reported by this backend": `CacheReadTokens`, `CostUSD`, `ContextSizeTokens`.

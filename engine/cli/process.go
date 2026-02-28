@@ -233,11 +233,16 @@ func (p *process) Err() error {
 
 // finish sets the terminal error and closes output+done channels.
 // Called exactly once via sync.Once.
+//
+// Close order matters: done must close before output so that Err()
+// returns the terminal error immediately after a consumer's range
+// over Output() exits. Closing output first creates a race —
+// the consumer goroutine can call Err() before done is closed.
 func (p *process) finish(err error) {
 	p.finishOnce.Do(func() {
 		p.termErr = err
-		close(p.output)
 		close(p.done)
+		close(p.output)
 	})
 }
 

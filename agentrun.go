@@ -27,7 +27,7 @@
 //
 //	engine := cli.NewEngine(claude.New())
 //	proc, err := engine.Start(ctx, agentrun.Session{
-//	    ID:     "s1",
+//	    CWD:    "/path/to/project",
 //	    Prompt: "Hello",
 //	})
 //	if err != nil { log.Fatal(err) }
