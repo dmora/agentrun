@@ -231,6 +231,12 @@ func (p *process) emit(msg agentrun.Message) {
 // finish sets the terminal error and closes output+done channels.
 // Cancels the context first so any emit() blocked on a full output channel
 // unblocks via ctx.Done(), then acquires outputMu to safely close.
+// finish sets the terminal error and closes done+output channels.
+//
+// Close order matters: done must close before output so that Err()
+// returns the terminal error immediately after a consumer's range
+// over Output() exits. Closing output first creates a race —
+// the consumer goroutine can call Err() before done is closed.
 func (p *process) finish(err error) {
 	p.finishOnce.Do(func() {
 		if p.stopping.Load() {
@@ -239,12 +245,12 @@ func (p *process) finish(err error) {
 		p.termErr = err
 		p.cancel() // unblock any emit() blocked in select
 
+		close(p.done)
+
 		p.outputMu.Lock()
 		p.outputClosed = true
 		close(p.output)
 		p.outputMu.Unlock()
-
-		close(p.done)
 	})
 }
 
