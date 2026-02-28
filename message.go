@@ -263,7 +263,7 @@ type InitMeta struct {
 // A non-nil ProcessMeta always has meaningful data.
 type ProcessMeta struct {
 	// PID is the OS process identifier of the subprocess.
-	// 0 means the subprocess has not started or PID is unavailable.
+	// Per the nil-guard contract on ProcessMeta, this field is always > 0.
 	PID int `json:"pid,omitempty"`
 
 	// Binary is the resolved path to the subprocess executable.

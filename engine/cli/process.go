@@ -367,7 +367,7 @@ func (p *process) processMetaSnapshot() *agentrun.ProcessMeta {
 	p.mu.Lock()
 	cmd := p.cmd
 	p.mu.Unlock()
-	if cmd == nil || cmd.Process == nil {
+	if cmd == nil || cmd.Process == nil || cmd.Process.Pid <= 0 {
 		return nil
 	}
 	return &agentrun.ProcessMeta{

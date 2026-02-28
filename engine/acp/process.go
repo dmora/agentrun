@@ -300,7 +300,7 @@ func wrapExitError(err error) error {
 // Contrast with CLI engine's processMetaSnapshot which locks p.mu because
 // CLI reassigns cmd on resumeAfterCleanExit for spawn-per-turn backends.
 func (p *process) processMetaSnapshot() *agentrun.ProcessMeta {
-	if p.cmd == nil || p.cmd.Process == nil {
+	if p.cmd == nil || p.cmd.Process == nil || p.cmd.Process.Pid <= 0 {
 		return nil
 	}
 	return &agentrun.ProcessMeta{
