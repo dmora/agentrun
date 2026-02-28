@@ -1056,3 +1056,76 @@ func TestEngine_Send_ResultContentEmpty(t *testing.T) {
 		t.Errorf("Content should be empty on result, got %q", result.Content)
 	}
 }
+
+// --- ExitError + ProcessMeta tests ---
+
+func TestExitCode_ACP_NonZeroExit(t *testing.T) {
+	wrapper := writeScript(t, "exit-42")
+	engine := acp.NewEngine(acp.WithBinary(wrapper))
+
+	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	defer cancel()
+
+	proc, err := engine.Start(ctx, agentrun.Session{CWD: t.TempDir()})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = proc.Stop(context.Background()) })
+
+	<-proc.Output() // drain init
+
+	// Drain output concurrently — process exits after prompt response.
+	go func() {
+		//nolint:revive // drain all messages until channel closes
+		for range proc.Output() {
+		}
+	}()
+
+	err = proc.Send(ctx, "test")
+	// RPC may or may not succeed before process exit.
+	_ = err
+
+	// Wait for process to finish.
+	_ = proc.Wait()
+
+	code, ok := agentrun.ExitCode(proc.Err())
+	if !ok {
+		t.Fatalf("ExitCode not found in error: %v", proc.Err())
+	}
+	if code != 42 {
+		t.Errorf("ExitCode = %d, want 42", code)
+	}
+}
+
+func TestExitCode_ACP_StopOverride(t *testing.T) {
+	proc, _ := startProc(t)
+	<-proc.Output() // drain init
+
+	_ = proc.Stop(context.Background())
+
+	if !errors.Is(proc.Err(), agentrun.ErrTerminated) {
+		t.Errorf("proc.Err() = %v, want ErrTerminated", proc.Err())
+	}
+	code, ok := agentrun.ExitCode(proc.Err())
+	if ok {
+		t.Errorf("ExitCode should be (0, false) when stopped, got (%d, true)", code)
+	}
+}
+
+func TestProcessMeta_ACP_OnInit(t *testing.T) {
+	proc, _ := startProc(t)
+
+	msg := <-proc.Output()
+	if msg.Type != agentrun.MessageInit {
+		t.Fatalf("first message type = %q, want %q", msg.Type, agentrun.MessageInit)
+	}
+	if msg.Process == nil {
+		t.Fatal("ProcessMeta should be populated on MessageInit")
+	}
+	if msg.Process.PID <= 0 {
+		t.Errorf("PID = %d, want > 0", msg.Process.PID)
+	}
+	if msg.Process.Binary == "" {
+		t.Error("Binary should not be empty")
+	}
+}

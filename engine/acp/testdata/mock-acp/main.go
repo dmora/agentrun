@@ -16,6 +16,7 @@
 //	ACP_MOCK_MODE=set-config-fail   — return error for session/set_config_option
 //	ACP_MOCK_MODE=slow-prompt       — delay prompt response by 2s (for ctx cancel tests)
 //	ACP_MOCK_MODE=prompt-then-exit  — respond to prompt then exit (for done+errCh race test)
+//	ACP_MOCK_MODE=exit-42           — respond to prompt then exit with code 42 (for ExitError test)
 //	ACP_MOCK_MODE=rich-usage        — respond with extended usage (cache, thinking tokens)
 //	ACP_MOCK_MODE=no-usage          — respond with no usage at all (nil)
 package main
@@ -246,6 +247,10 @@ func handleSessionPrompt(req *rpcRequest) {
 	// done+errCh race where the process exits right after RPC completes.
 	if mode == "prompt-then-exit" {
 		os.Exit(0)
+	}
+	// Exit with non-zero code after prompt — exercises ExitError wrapping.
+	if mode == "exit-42" {
+		os.Exit(42)
 	}
 }
 

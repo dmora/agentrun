@@ -262,6 +262,8 @@ func (p *process) readLoop(ctx context.Context, stdout io.ReadCloser) {
 			waitErr = panicErr
 		case scanErr != nil:
 			waitErr = fmt.Errorf("cli: scanner: %w", scanErr)
+		default:
+			waitErr = wrapExitError(waitErr)
 		}
 		if p.stopping.Load() {
 			waitErr = agentrun.ErrTerminated
@@ -323,6 +325,9 @@ func (p *process) scanLines(ctx context.Context, stdout io.ReadCloser) error {
 		}
 
 		lastStopReason = applyStopReasonCarryForward(&msg, lastStopReason)
+		if msg.Type == agentrun.MessageInit {
+			msg.Process = p.processMetaSnapshot()
+		}
 
 		select {
 		case p.output <- msg:
@@ -331,6 +336,44 @@ func (p *process) scanLines(ctx context.Context, stdout io.ReadCloser) error {
 		}
 	}
 	return scanner.Err()
+}
+
+// wrapExitError converts a non-zero *exec.ExitError to *agentrun.ExitError.
+// nil → nil, non-ExitError → passthrough, code 0 → nil (clean exit).
+// Preserves the error chain via ExitError.Unwrap.
+//
+// NOTE: intentionally duplicated in engine/acp/process.go — keep in sync.
+func wrapExitError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		return err
+	}
+	code := ee.ExitCode()
+	if code == 0 {
+		return nil
+	}
+	return &agentrun.ExitError{Code: code, Err: err}
+}
+
+// processMetaSnapshot returns subprocess metadata for MessageInit enrichment.
+// Returns nil if cmd or its process is unavailable.
+//
+// Locks p.mu because CLI's cmd is reassigned on resumeAfterCleanExit
+// for spawn-per-turn backends — unlike ACP where cmd is write-once.
+func (p *process) processMetaSnapshot() *agentrun.ProcessMeta {
+	p.mu.Lock()
+	cmd := p.cmd
+	p.mu.Unlock()
+	if cmd == nil || cmd.Process == nil {
+		return nil
+	}
+	return &agentrun.ProcessMeta{
+		PID:    cmd.Process.Pid,
+		Binary: cmd.Path,
+	}
 }
 
 // applyStopReasonCarryForward implements StopReason carry-forward between

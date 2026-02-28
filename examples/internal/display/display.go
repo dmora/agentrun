@@ -42,9 +42,12 @@ func printInit(msg agentrun.Message) {
 	if s := formatInitMeta(msg.Init); s != "" {
 		fmt.Printf("[init]    %s\n", s)
 	}
+	if msg.Process != nil {
+		fmt.Printf("[init]    pid=%d binary=%s\n", msg.Process.PID, msg.Process.Binary)
+	}
 	if msg.ResumeID != "" {
 		fmt.Printf("[init]    session ID: %s\n", msg.ResumeID)
-	} else if msg.Init == nil {
+	} else if msg.Init == nil && msg.Process == nil {
 		fmt.Println("[init]    (session started)")
 	}
 }
@@ -128,6 +131,9 @@ func PrintRaw(msg agentrun.Message) {
 func printRawMetadata(msg agentrun.Message) {
 	if s := formatInitMeta(msg.Init); s != "" {
 		fmt.Printf("           init: %s\n", s)
+	}
+	if msg.Process != nil {
+		fmt.Printf("           process: pid=%d binary=%s\n", msg.Process.PID, msg.Process.Binary)
 	}
 	if msg.ErrorCode != "" {
 		fmt.Printf("           error_code: %s\n", msg.ErrorCode)
