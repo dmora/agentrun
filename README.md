@@ -93,7 +93,7 @@ See [`examples/interactive`](examples/interactive) for a full multi-turn REPL.
 
 ## Filtering Messages
 
-The `filter` package provides composable channel middleware for message streams. Each wrapper consumes the input channel — pick one per `Output()` call:
+The `filter` package provides composable channel middleware for message streams. Each filter consumes an input channel and returns a new, filtered channel — they can be chained:
 
 ```go
 import "github.com/dmora/agentrun/filter"
@@ -111,7 +111,8 @@ Available filters:
 | `filter.Completed(ctx, ch)` | Drops streaming deltas, passes everything else |
 | `filter.ResultOnly(ctx, ch)` | Keeps only `MessageResult` |
 | `filter.Filter(ctx, ch, types...)` | Keeps only the specified message types |
-| `filter.IsDelta(t)` | Returns true for `_delta` message types |
+
+The `filter.IsDelta(t)` predicate returns true for `_delta` message types — useful in custom filtering logic.
 
 ## Message Types
 
@@ -196,7 +197,7 @@ session := agentrun.Session{
         agentrun.OptionEffort:         "high",                   // low/medium/high/max
         agentrun.OptionThinkingBudget: "10000",                  // enable extended thinking
         agentrun.OptionHITL:           "off",                    // human-in-the-loop
-        agentrun.OptionAddDirs:        "/shared/lib\n/shared/proto",
+        agentrun.OptionAddDirs:        "/shared/lib\n/shared/proto", // newline-separated
     },
     Env: map[string]string{
         "OPENCODE_AUTO_APPROVE": "1",
