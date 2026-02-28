@@ -101,6 +101,8 @@ func FuzzMessageJSON(f *testing.F) {
 	f.Add([]byte(`{"type":"init","init":{"model":"claude-sonnet-4-5-20250514","agent_name":"opencode","agent_version":"1.2.3"}}`))
 	f.Add([]byte(`{"type":"init","init":{"model":"\u0000control\u001f chars"}}`))
 	f.Add([]byte(`{"type":"init","init":{}}`))
+	f.Add([]byte(`{"type":"init","process":{"pid":12345,"binary":"/usr/bin/echo"}}`))
+	f.Add([]byte(`{"type":"init","process":null}`))
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		var msg Message

@@ -3,6 +3,8 @@ package agentrun
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os/exec"
 	"testing"
 	"time"
 )
@@ -648,5 +650,162 @@ func TestMessageJSON_NilInit(t *testing.T) {
 	}
 	if _, ok := raw["init"]; ok {
 		t.Error("init field should be omitted when nil")
+	}
+}
+
+// --- ExitError tests ---
+
+func TestExitError_Error(t *testing.T) {
+	inner := errors.New("exit status 42")
+	ee := &ExitError{Code: 42, Err: inner}
+	if got := ee.Error(); got != "exit status 42" {
+		t.Errorf("Error() = %q, want %q", got, "exit status 42")
+	}
+}
+
+func TestExitError_ErrorNilInner(t *testing.T) {
+	ee := &ExitError{Code: 42}
+	want := "agentrun: exit status 42"
+	if got := ee.Error(); got != want {
+		t.Errorf("Error() = %q, want %q", got, want)
+	}
+}
+
+func TestExitError_Unwrap(t *testing.T) {
+	inner := errors.New("original")
+	ee := &ExitError{Code: 1, Err: inner}
+	if !errors.Is(ee, inner) {
+		t.Error("errors.Is should find inner error through Unwrap")
+	}
+}
+
+func TestExitError_Unwrap_ExecExitError(t *testing.T) {
+	// Simulate wrapping an *exec.ExitError — verify the chain is reachable.
+	cmd := exec.Command("false")
+	waitErr := cmd.Run()
+	var origExec *exec.ExitError
+	if !errors.As(waitErr, &origExec) {
+		t.Skip("exec.Command(\"false\") did not produce *exec.ExitError")
+	}
+	ee := &ExitError{Code: origExec.ExitCode(), Err: waitErr}
+
+	var recovered *exec.ExitError
+	if !errors.As(ee, &recovered) {
+		t.Error("errors.As should find *exec.ExitError through ExitError chain")
+	}
+}
+
+// --- ExitCode tests ---
+
+func TestExitCode_Found(t *testing.T) {
+	err := &ExitError{Code: 42}
+	code, ok := ExitCode(err)
+	if !ok || code != 42 {
+		t.Errorf("ExitCode = (%d, %v), want (42, true)", code, ok)
+	}
+}
+
+func TestExitCode_Wrapped(t *testing.T) {
+	inner := &ExitError{Code: 7}
+	wrapped := fmt.Errorf("context: %w", inner)
+	code, ok := ExitCode(wrapped)
+	if !ok || code != 7 {
+		t.Errorf("ExitCode = (%d, %v), want (7, true)", code, ok)
+	}
+}
+
+func TestExitCode_NotFound(t *testing.T) {
+	err := errors.New("generic error")
+	code, ok := ExitCode(err)
+	if ok || code != 0 {
+		t.Errorf("ExitCode = (%d, %v), want (0, false)", code, ok)
+	}
+}
+
+func TestExitCode_Nil(t *testing.T) {
+	code, ok := ExitCode(nil)
+	if ok || code != 0 {
+		t.Errorf("ExitCode(nil) = (%d, %v), want (0, false)", code, ok)
+	}
+}
+
+func TestExitCode_ErrTerminated(t *testing.T) {
+	code, ok := ExitCode(ErrTerminated)
+	if ok || code != 0 {
+		t.Errorf("ExitCode(ErrTerminated) = (%d, %v), want (0, false)", code, ok)
+	}
+}
+
+func TestExitCode_NegativeCode(t *testing.T) {
+	err := &ExitError{Code: -1}
+	code, ok := ExitCode(err)
+	if !ok || code != -1 {
+		t.Errorf("ExitCode = (%d, %v), want (-1, true)", code, ok)
+	}
+}
+
+// --- ProcessMeta JSON tests ---
+
+func TestProcessMeta_JSON_RoundTrip(t *testing.T) {
+	msg := Message{
+		Type: MessageInit,
+		Process: &ProcessMeta{
+			PID:    12345,
+			Binary: "/usr/bin/echo",
+		},
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got Message
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Process == nil {
+		t.Fatal("Process should be populated")
+	}
+	if got.Process.PID != 12345 {
+		t.Errorf("PID = %d, want 12345", got.Process.PID)
+	}
+	if got.Process.Binary != "/usr/bin/echo" {
+		t.Errorf("Binary = %q, want %q", got.Process.Binary, "/usr/bin/echo")
+	}
+}
+
+func TestProcessMeta_JSON_Omitempty(t *testing.T) {
+	// Nil ProcessMeta should be omitted from JSON.
+	msg := Message{Type: MessageInit}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, ok := raw["process"]; ok {
+		t.Error("process field should be omitted when nil")
+	}
+
+	// Zero-valued ProcessMeta fields should be omitted.
+	msg2 := Message{Type: MessageInit, Process: &ProcessMeta{}}
+	data2, err := json.Marshal(msg2)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var raw2 map[string]json.RawMessage
+	if err := json.Unmarshal(data2, &raw2); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, ok := raw2["process"]; !ok {
+		t.Error("process field should be present when struct is non-nil")
+	}
+	var pm ProcessMeta
+	if err := json.Unmarshal(raw2["process"], &pm); err != nil {
+		t.Fatalf("unmarshal process: %v", err)
+	}
+	if pm.PID != 0 || pm.Binary != "" {
+		t.Errorf("zero ProcessMeta fields should round-trip as zero: %+v", pm)
 	}
 }

@@ -250,6 +250,9 @@ func drainTurn(ctx context.Context, proc agentrun.Process) error {
 		case msg, ok := <-proc.Output():
 			if !ok {
 				if err := proc.Err(); err != nil {
+					if code, ok := agentrun.ExitCode(err); ok {
+						return fmt.Errorf("process exited with code %d", code)
+					}
 					return fmt.Errorf("process exited: %w", err)
 				}
 				return nil // expected: subprocess exited, turn complete

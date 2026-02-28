@@ -175,7 +175,7 @@ func wireReadLoop(conn *Conn, p *process, hitl agentrun.HITL, opts EngineOptions
 		conn.ReadLoop()
 		close(updateCh)     // signal dispatch goroutine to finish
 		dispatchDone.Wait() // wait for all queued updates to be emitted
-		p.finish(p.waitCmd())
+		p.finish(wrapExitError(p.waitCmd()))
 	}()
 }
 

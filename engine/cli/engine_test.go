@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -1588,5 +1589,179 @@ func TestStart_CWD_IsFile(t *testing.T) {
 	_, err := eng.Start(testCtx(t), agentrun.Session{CWD: filePath})
 	if err == nil {
 		t.Fatal("expected error when CWD is a file")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ExitError + ProcessMeta tests
+// ---------------------------------------------------------------------------
+
+// exitBackend spawns "bash -c 'exit <code>'" with Resumer to satisfy Start().
+func exitBackend(code int) *testResumerBackend {
+	return &testResumerBackend{
+		testBackend: testBackend{
+			spawnFn: func(_ agentrun.Session) (string, []string) {
+				return binBash, []string{"-c", fmt.Sprintf("exit %d", code)}
+			},
+			parseFn: textParser,
+		},
+		resumeFn: func(_ agentrun.Session, _ string) (string, []string, error) {
+			return binBash, []string{"-c", fmt.Sprintf("exit %d", code)}, nil
+		},
+	}
+}
+
+func TestExitCode_NonZeroExit(t *testing.T) {
+	eng := cli.NewEngine(exitBackend(42))
+	proc, err := eng.Start(testCtx(t), agentrun.Session{
+		CWD:    tempDir(t),
+		Prompt: "test",
+	})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	// Drain output until channel closes.
+	drain(proc)
+
+	code, ok := agentrun.ExitCode(proc.Err())
+	if !ok {
+		t.Fatalf("ExitCode not found in error: %v", proc.Err())
+	}
+	if code != 42 {
+		t.Errorf("ExitCode = %d, want 42", code)
+	}
+}
+
+func TestExitCode_CleanExit(t *testing.T) {
+	eng := cli.NewEngine(exitBackend(0))
+	proc, err := eng.Start(testCtx(t), agentrun.Session{
+		CWD:    tempDir(t),
+		Prompt: "test",
+	})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	drain(proc)
+
+	code, ok := agentrun.ExitCode(proc.Err())
+	if ok {
+		t.Errorf("ExitCode should be (0, false) for clean exit, got (%d, true)", code)
+	}
+	if proc.Err() != nil {
+		t.Errorf("proc.Err() = %v, want nil for clean exit", proc.Err())
+	}
+}
+
+func TestExitCode_StopOverride(t *testing.T) {
+	// Use sleep so the process is running when we call Stop.
+	backend := &testResumerBackend{
+		testBackend: testBackend{
+			spawnFn: func(_ agentrun.Session) (string, []string) {
+				return binSleep, []string{"60"}
+			},
+			parseFn: textParser,
+		},
+		resumeFn: func(_ agentrun.Session, _ string) (string, []string, error) {
+			return binSleep, []string{"60"}, nil
+		},
+	}
+	eng := cli.NewEngine(backend)
+	proc, err := eng.Start(testCtx(t), agentrun.Session{
+		CWD:    tempDir(t),
+		Prompt: "test",
+	})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	// Stop should override with ErrTerminated.
+	stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = proc.Stop(stopCtx)
+
+	if !errors.Is(proc.Err(), agentrun.ErrTerminated) {
+		t.Errorf("proc.Err() = %v, want ErrTerminated", proc.Err())
+	}
+	code, ok := agentrun.ExitCode(proc.Err())
+	if ok {
+		t.Errorf("ExitCode should be (0, false) when stopped, got (%d, true)", code)
+	}
+}
+
+func TestExitCode_ChainPreserved(t *testing.T) {
+	eng := cli.NewEngine(exitBackend(42))
+	proc, err := eng.Start(testCtx(t), agentrun.Session{
+		CWD:    tempDir(t),
+		Prompt: "test",
+	})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	drain(proc)
+
+	// The original *exec.ExitError should be reachable through Unwrap.
+	var execErr *exec.ExitError
+	if !errors.As(proc.Err(), &execErr) {
+		t.Fatalf("errors.As to *exec.ExitError failed through ExitError chain: %v", proc.Err())
+	}
+	if execErr.ExitCode() != 42 {
+		t.Errorf("exec.ExitError.ExitCode() = %d, want 42", execErr.ExitCode())
+	}
+}
+
+func TestProcessMeta_OnInit(t *testing.T) {
+	// Backend emits init then a text message, so we can verify ProcessMeta
+	// is set on init and nil on subsequent messages.
+	backend := &testResumerBackend{
+		testBackend: testBackend{
+			spawnFn: func(_ agentrun.Session) (string, []string) {
+				return binBash, []string{"-c", `echo '{"type":"init"}'; echo '{"type":"text","content":"hello"}'`}
+			},
+			parseFn: func(line string) (agentrun.Message, error) {
+				if strings.Contains(line, "init") {
+					return agentrun.Message{Type: agentrun.MessageInit}, nil
+				}
+				return agentrun.Message{Type: agentrun.MessageText, Content: "hello"}, nil
+			},
+		},
+		resumeFn: func(_ agentrun.Session, _ string) (string, []string, error) {
+			return binBash, []string{"-c", "echo done"}, nil
+		},
+	}
+
+	eng := cli.NewEngine(backend)
+	proc, err := eng.Start(testCtx(t), agentrun.Session{
+		CWD:    tempDir(t),
+		Prompt: "test",
+	})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = proc.Stop(ctx)
+	}()
+
+	// First message should be MessageInit with ProcessMeta.
+	msg := <-proc.Output()
+	if msg.Type != agentrun.MessageInit {
+		t.Fatalf("first message type = %q, want %q", msg.Type, agentrun.MessageInit)
+	}
+	if msg.Process == nil {
+		t.Fatal("ProcessMeta should be populated on MessageInit")
+	}
+	if msg.Process.PID <= 0 {
+		t.Errorf("PID = %d, want > 0", msg.Process.PID)
+	}
+	if msg.Process.Binary == "" {
+		t.Error("Binary should not be empty")
+	}
+
+	// Subsequent non-init messages must NOT have ProcessMeta.
+	for msg := range proc.Output() {
+		if msg.Process != nil {
+			t.Errorf("Process should be nil on %s message, got PID=%d", msg.Type, msg.Process.PID)
+		}
 	}
 }

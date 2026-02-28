@@ -132,6 +132,11 @@ type Message struct {
 	// Only non-nil when at least one field contains meaningful data.
 	Init *InitMeta `json:"init,omitempty"`
 
+	// Process carries subprocess metadata from the engine.
+	// Set on MessageInit messages by subprocess engines (CLI, ACP).
+	// Nil on all other message types and for API-based engines.
+	Process *ProcessMeta `json:"process,omitempty"`
+
 	// Raw is the original unparsed JSON from the backend.
 	// Backends populate this for pass-through or debugging.
 	Raw json.RawMessage `json:"raw,omitempty"`
@@ -243,4 +248,26 @@ type InitMeta struct {
 	// Currently populated by ACP backends only.
 	// Sanitized: control chars rejected, truncated to 128 bytes at parse time.
 	AgentVersion string `json:"agent_version,omitempty"`
+}
+
+// ProcessMeta describes the OS subprocess backing a session.
+// Set on MessageInit messages by subprocess engines. Nil for API-based
+// engines and for all non-init message types.
+//
+// All fields are snapshot values captured at init time. For spawn-per-turn
+// backends (e.g., OpenCode, Codex), PID reflects the first subprocess and
+// may change between turns — callers should not treat PID as a stable
+// session-lifetime identifier.
+//
+// Nil-guard contract: engines only set Process when PID > 0.
+// A non-nil ProcessMeta always has meaningful data.
+type ProcessMeta struct {
+	// PID is the OS process identifier of the subprocess.
+	// Per the nil-guard contract on ProcessMeta, this field is always > 0.
+	PID int `json:"pid,omitempty"`
+
+	// Binary is the resolved path to the subprocess executable.
+	// Populated from exec.Cmd.Path (the result of exec.LookPath).
+	// Empty means not available.
+	Binary string `json:"binary,omitempty"`
 }

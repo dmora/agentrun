@@ -23,7 +23,9 @@ import (
 
 // process implements agentrun.Process for ACP subprocess sessions.
 type process struct {
-	conn      *Conn
+	conn *Conn
+	// cmd is immutable after newProcess() returns — assigned once, never
+	// reassigned. processMetaSnapshot reads it without a lock.
 	cmd       *exec.Cmd
 	stdin     io.WriteCloser
 	sessionID string
@@ -271,6 +273,42 @@ func signalProcess(proc *os.Process, sig os.Signal) error {
 	return err
 }
 
+// wrapExitError converts a non-zero *exec.ExitError to *agentrun.ExitError.
+// nil → nil, non-ExitError → passthrough, code 0 → nil (clean exit).
+// Preserves the error chain via ExitError.Unwrap.
+//
+// NOTE: intentionally duplicated in engine/cli/process.go — keep in sync.
+func wrapExitError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		return err
+	}
+	code := ee.ExitCode()
+	if code == 0 {
+		return nil
+	}
+	return &agentrun.ExitError{Code: code, Err: err}
+}
+
+// processMetaSnapshot returns subprocess metadata for MessageInit enrichment.
+// Returns nil if cmd or its process is unavailable.
+//
+// No lock needed: cmd is immutable after newProcess() returns (write-once).
+// Contrast with CLI engine's processMetaSnapshot which locks p.mu because
+// CLI reassigns cmd on resumeAfterCleanExit for spawn-per-turn backends.
+func (p *process) processMetaSnapshot() *agentrun.ProcessMeta {
+	if p.cmd == nil || p.cmd.Process == nil || p.cmd.Process.Pid <= 0 {
+		return nil
+	}
+	return &agentrun.ProcessMeta{
+		PID:    p.cmd.Process.Pid,
+		Binary: p.cmd.Path,
+	}
+}
+
 // --- Handshake ---
 
 // makeUpdateHandler returns a notification handler that parses session/update
@@ -370,6 +408,7 @@ func (p *process) handshake(ctx context.Context, session agentrun.Session) error
 		Type:      agentrun.MessageInit,
 		ResumeID:  p.sessionID,
 		Init:      buildInitMeta(&initResult, hr.models),
+		Process:   p.processMetaSnapshot(),
 		Timestamp: time.Now(),
 	})
 
