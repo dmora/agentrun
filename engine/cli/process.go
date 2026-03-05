@@ -400,12 +400,11 @@ func enrichContextUsed(u *agentrun.Usage) {
 	if u == nil || u.ContextUsedTokens != 0 {
 		return
 	}
-	in := max(0, u.InputTokens)
-	out := max(0, u.OutputTokens)
-	cacheRead := max(0, u.CacheReadTokens)
-	cacheWrite := max(0, u.CacheWriteTokens)
-	thinking := max(0, u.ThinkingTokens)
-	total := in + out + cacheRead + cacheWrite + thinking
+	total := max(0, u.InputTokens) +
+		max(0, u.OutputTokens) +
+		max(0, u.CacheReadTokens) +
+		max(0, u.CacheWriteTokens) +
+		max(0, u.ThinkingTokens)
 	if total <= 0 {
 		return
 	}
