@@ -333,6 +333,11 @@ func (p *process) scanLines(ctx context.Context, stdout io.ReadCloser) error {
 		if msg.Type == agentrun.MessageInit {
 			msg.Process = p.processMetaSnapshot()
 		}
+		if msg.Type == agentrun.MessageResult {
+			// Derive ContextUsedTokens from token fields when not already
+			// set by the backend. See enrichContextUsed godoc for semantics.
+			enrichContextUsed(msg.Usage)
+		}
 
 		select {
 		case p.output <- msg:
@@ -379,6 +384,31 @@ func (p *process) processMetaSnapshot() *agentrun.ProcessMeta {
 		PID:    cmd.Process.Pid,
 		Binary: cmd.Path,
 	}
+}
+
+// enrichContextUsed populates ContextUsedTokens on MessageResult when the
+// backend has not already provided a value. Derives context fill from all
+// token fields that accumulate in the context window.
+//
+// Best-effort estimate — see Usage.ContextUsedTokens godoc for semantics.
+// Backends with authoritative context data (ACP) populate the field directly;
+// the no-override guard preserves their value.
+//
+// NOTE: intentionally in engine/cli (not engine/internal) — only CLI backends
+// need derived context fill today. Follows wrapExitError inlining precedent.
+func enrichContextUsed(u *agentrun.Usage) {
+	if u == nil || u.ContextUsedTokens != 0 {
+		return
+	}
+	total := max(0, u.InputTokens) +
+		max(0, u.OutputTokens) +
+		max(0, u.CacheReadTokens) +
+		max(0, u.CacheWriteTokens) +
+		max(0, u.ThinkingTokens)
+	if total <= 0 {
+		return
+	}
+	u.ContextUsedTokens = total
 }
 
 // applyStopReasonCarryForward implements StopReason carry-forward between

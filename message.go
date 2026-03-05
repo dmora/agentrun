@@ -36,6 +36,10 @@ const (
 	// Contains window capacity and current fill level. Not all backends emit
 	// this type; it is currently produced by ACP's usage_update notification.
 	//
+	// CLI backends do not emit MessageContextWindow. Instead, the CLI engine
+	// populates ContextUsedTokens on MessageResult as a derived estimate.
+	// See Usage.ContextUsedTokens for details on both sources.
+	//
 	// Only ContextSizeTokens and ContextUsedTokens are meaningful on this
 	// message type. Other Usage fields (InputTokens, OutputTokens, CostUSD,
 	// etc.) are zero and should be ignored — they belong on MessageResult.
@@ -215,7 +219,15 @@ type Usage struct {
 
 	// ContextUsedTokens is the current context window fill level in tokens.
 	// Omitted when zero (0 means not reported by this backend).
-	// Set on MessageContextWindow messages (ACP usage_update).
+	//
+	// Sources:
+	//   - MessageContextWindow: authoritative measurement from the agent
+	//     protocol (ACP usage_update).
+	//   - MessageResult: best available estimate derived by the CLI engine
+	//     from per-turn token counts (InputTokens + OutputTokens +
+	//     CacheReadTokens + CacheWriteTokens + ThinkingTokens). Not set
+	//     when all token fields are zero or when the backend already
+	//     provides an authoritative value.
 	ContextUsedTokens int `json:"context_used_tokens,omitempty"`
 }
 
