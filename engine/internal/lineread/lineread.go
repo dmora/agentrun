@@ -63,13 +63,12 @@ func (lr *Reader) ReadLine() ([]byte, error) {
 		if err == nil {
 			// Found newline. The limit applies to content (post-strip),
 			// so subtract the newline overhead (\n or \r\n).
-			if lr.exceedsMax(totalSize - newlineLen(fragment)) {
+			if lr.exceedsMax(totalSize - newlineOverhead(buf, fragment)) {
 				return nil, ErrLineTooLong
 			}
 			return lr.finishLine(buf, fragment), nil
 		}
-		// No newline in fragment — totalSize equals content size.
-		if lr.exceedsMax(totalSize) {
+		if lr.exceedsMax(contentEstimate(totalSize, fragment)) {
 			lr.drainIfBufferFull(err)
 			return nil, ErrLineTooLong
 		}
@@ -97,6 +96,16 @@ func (lr *Reader) ReadLineString() (string, error) {
 // Always returns false when maxLineSize <= 0 (unlimited).
 func (lr *Reader) exceedsMax(contentSize int) bool {
 	return lr.maxLineSize > 0 && contentSize > lr.maxLineSize
+}
+
+// contentEstimate returns the estimated content size for a mid-stream
+// fragment. A trailing \r is discounted because it may be part of a \r\n
+// pair split across the buffer boundary.
+func contentEstimate(totalSize int, fragment []byte) int {
+	if len(fragment) > 0 && fragment[len(fragment)-1] == '\r' {
+		return totalSize - 1
+	}
+	return totalSize
 }
 
 // drainIfBufferFull discards the remainder of an oversized line when
@@ -141,14 +150,19 @@ func (lr *Reader) discardLine() {
 	}
 }
 
-// newlineLen returns the number of newline bytes at the end of b
-// (2 for \r\n, 1 for \n, 0 otherwise).
-func newlineLen(b []byte) int {
-	n := len(b)
-	if n >= 2 && b[n-2] == '\r' && b[n-1] == '\n' {
+// newlineOverhead returns the number of trailing newline bytes (\n or \r\n)
+// considering both the accumulated buffer and the final fragment. This
+// handles CRLF pairs split across buffer boundaries where \r is in buf
+// and \n is the sole byte in fragment.
+func newlineOverhead(buf *bytes.Buffer, fragment []byte) int {
+	n := len(fragment)
+	if n >= 2 && fragment[n-2] == '\r' && fragment[n-1] == '\n' {
 		return 2
 	}
-	if n >= 1 && b[n-1] == '\n' {
+	if n >= 1 && fragment[n-1] == '\n' {
+		if buf != nil && buf.Len() > 0 && buf.Bytes()[buf.Len()-1] == '\r' {
+			return 2
+		}
 		return 1
 	}
 	return 0

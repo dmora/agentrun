@@ -238,20 +238,18 @@ func TestReadLine_JustUnderMaxLineSize(t *testing.T) {
 
 func TestReadLine_MaxLineSizeExceeded_MultiFragment(t *testing.T) {
 	// Content exceeds limit across fragments (buffer=32, content=200, limit=100).
-	line := strings.Repeat("M", 200)
-	lr := NewReader(strings.NewReader(line+"\n"), 32, 100)
+	input := strings.Repeat("M", 200) + "\nok\n"
+	lr := NewReader(strings.NewReader(input), 32, 100)
 
 	_, err := lr.ReadLineString()
 	if !errors.Is(err, ErrLineTooLong) {
 		t.Fatalf("got %v, want ErrLineTooLong", err)
 	}
 
-	// Verify alignment — next line reads fine.
-	lr2 := NewReader(strings.NewReader(strings.Repeat("M", 200)+"\nok\n"), 32, 100)
-	_, _ = lr2.ReadLineString() // discard oversized
-	got, err := lr2.ReadLineString()
+	// Reader should stay aligned — next line reads fine from the same reader.
+	got, err := lr.ReadLineString()
 	if err != nil {
-		t.Fatalf("ReadLineString: %v", err)
+		t.Fatalf("ReadLineString after overflow: %v", err)
 	}
 	if got != "ok" {
 		t.Errorf("got %q, want %q", got, "ok")
@@ -269,6 +267,21 @@ func TestReadLine_ExactlyAtMaxLineSize_MultiFragment(t *testing.T) {
 	}
 	if got != line {
 		t.Errorf("len(got) = %d, want %d", len(got), len(line))
+	}
+}
+
+func TestReadLine_ExactlyAtMaxLineSize_CRLFBoundarySplit(t *testing.T) {
+	// 100-byte content + \r\n where bufSize=101 forces \r into fragment 1
+	// and \n into fragment 2. The trailing \r must not be counted as content.
+	line := strings.Repeat("A", 100)
+	lr := NewReader(strings.NewReader(line+"\r\n"), 101, 100)
+
+	got, err := lr.ReadLineString()
+	if err != nil {
+		t.Fatalf("ReadLineString: %v (100-byte content with CRLF boundary split should fit maxLineSize=100)", err)
+	}
+	if got != line {
+		t.Errorf("got %q, want %q", got, line)
 	}
 }
 
