@@ -189,6 +189,7 @@ func parseResultMessage(raw map[string]any, msg *agentrun.Message) {
 	if sr := jsonutil.GetString(raw, "stop_reason"); sr != "" {
 		msg.StopReason = stoputil.Sanitize(sr)
 	}
+	msg.Denials = extractPermissionDenials(raw)
 }
 
 // parseErrorMessage handles "error" events.
@@ -263,6 +264,36 @@ func parseContentBlockDelta(event map[string]any, msg *agentrun.Message) {
 		msg.Type = agentrun.MessageSystem
 		msg.Content = "content_block_delta: unknown delta type: " + jsonutil.GetString(delta, "type")
 	}
+}
+
+// extractPermissionDenials extracts the "permission_denials" array from a result
+// event. Each entry is expected to have "tool" and "reason" string fields.
+// Returns nil when the array is absent, empty, or contains no valid entries.
+func extractPermissionDenials(raw map[string]any) []agentrun.PermissionDenial {
+	arr, ok := raw["permission_denials"].([]any)
+	if !ok || len(arr) == 0 {
+		return nil
+	}
+	var denials []agentrun.PermissionDenial
+	for _, item := range arr {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		tool := errfmt.SanitizeCode(jsonutil.GetString(entry, "tool"))
+		reason := errfmt.Truncate(jsonutil.GetString(entry, "reason"))
+		if tool == "" && reason == "" {
+			continue
+		}
+		denials = append(denials, agentrun.PermissionDenial{
+			Tool:   tool,
+			Reason: reason,
+		})
+	}
+	if len(denials) == 0 {
+		return nil
+	}
+	return denials
 }
 
 // extractTokenUsage extracts token usage from a source map.

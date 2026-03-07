@@ -26,6 +26,14 @@ const (
 	// are Claude CLI-specific — other backends have different or no
 	// permission models. See DESIGN.md decision rule.
 	OptionPermissionMode = "claude.permission_mode"
+
+	// OptionAllowedTools specifies tools that bypass permission checks.
+	// Value is newline-separated tool names (e.g., "Read\nGrep\nGlob").
+	// Maps to repeated --allowedTools <name> flags on the CLI.
+	// Orthogonal to permission mode — always appended when set, regardless
+	// of which mode is active. The CLI decides enforcement semantics.
+	// Backend-specific: only Claude CLI supports --allowedTools.
+	OptionAllowedTools = "claude.allowed_tools"
 )
 
 // validResumeID matches safe Claude session identifiers.
@@ -49,6 +57,11 @@ const (
 
 	// PermissionPlan restricts Claude to plan-only mode.
 	PermissionPlan PermissionMode = "plan"
+
+	// PermissionDontAsk auto-denies all permission requests and reports
+	// denied tools in the result event's permission_denials array.
+	// Maps to CLI flag value "dontAsk".
+	PermissionDontAsk PermissionMode = "dontAsk"
 )
 
 const defaultBinary = "claude"
@@ -245,6 +258,13 @@ func appendSessionArgs(args []string, session agentrun.Session) []string {
 	// Additional directories.
 	args = optutil.AppendAddDirs(args, session.Options, "--add-dir")
 
+	// Allowed tools — orthogonal to permission mode (always appended when set).
+	for _, tool := range agentrun.ParseListOption(session.Options, OptionAllowedTools) {
+		if !strings.HasPrefix(tool, "-") {
+			args = append(args, "--allowedTools", tool)
+		}
+	}
+
 	return args
 }
 
@@ -339,7 +359,9 @@ func mapPermission(perm PermissionMode) (string, error) {
 		return "bypassPermissions", nil
 	case PermissionPlan:
 		return "plan", nil
+	case PermissionDontAsk:
+		return "dontAsk", nil
 	default:
-		return "", fmt.Errorf("claude: unknown permission mode %q; valid: default, acceptEdits, bypassAll, plan", perm)
+		return "", fmt.Errorf("claude: unknown permission mode %q; valid: default, acceptEdits, bypassAll, plan, dontAsk", perm)
 	}
 }

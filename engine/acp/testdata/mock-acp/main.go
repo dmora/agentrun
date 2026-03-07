@@ -51,10 +51,11 @@ type rpcError struct {
 }
 
 var (
-	enc     = json.NewEncoder(os.Stdout)
-	scanner = bufio.NewScanner(os.Stdin)
-	mode    = os.Getenv("ACP_MOCK_MODE")
-	nextID  int64
+	enc             = json.NewEncoder(os.Stdout)
+	scanner         = bufio.NewScanner(os.Stdin)
+	mode            = os.Getenv("ACP_MOCK_MODE")
+	nextID          int64
+	pendingRequests []*rpcRequest // buffered by sendPermissionRequest
 )
 
 func main() {
@@ -65,6 +66,17 @@ func main() {
 			continue
 		}
 		handleRequest(&req)
+		drainPending()
+	}
+}
+
+// drainPending processes any requests buffered by sendPermissionRequest
+// (e.g., session/prompt arriving while waiting for a permission response).
+func drainPending() {
+	for len(pendingRequests) > 0 {
+		req := pendingRequests[0]
+		pendingRequests = pendingRequests[1:]
+		handleRequest(req)
 	}
 }
 
@@ -171,6 +183,16 @@ func handleSessionLoad(req *rpcRequest) {
 }
 
 func handleSessionPrompt(req *rpcRequest) {
+	// Extract params up front — prompt text needed for echo below.
+	var params struct {
+		SessionID string `json:"sessionId"`
+		Prompt    []struct {
+			Text string `json:"text"`
+		} `json:"prompt"`
+	}
+	_ = json.Unmarshal(req.Params, &params)
+	sid := params.SessionID
+
 	// Slow prompt mode — delay before responding (for ctx cancel tests).
 	if mode == "slow-prompt" {
 		time.Sleep(2 * time.Second)
@@ -180,13 +202,6 @@ func handleSessionPrompt(req *rpcRequest) {
 	if mode == "permission" {
 		sendPermissionRequest()
 	}
-
-	// Extract sessionId from params.
-	var params struct {
-		SessionID string `json:"sessionId"`
-	}
-	_ = json.Unmarshal(req.Params, &params)
-	sid := params.SessionID
 
 	// Emit streaming updates as notifications with new envelope format.
 	notifyUpdate(sid, map[string]any{
@@ -224,6 +239,14 @@ func handleSessionPrompt(req *rpcRequest) {
 			{"type": "content", "content": map[string]string{"type": "text", "text": "file contents"}},
 		},
 	})
+
+	// In permission mode, echo prompt text for turn identification in tests.
+	if mode == "permission" && len(params.Prompt) > 0 && params.Prompt[0].Text != "" {
+		notifyUpdate(sid, map[string]any{
+			"sessionUpdate": "agent_message_chunk",
+			"content":       map[string]string{"type": "text", "text": "[" + params.Prompt[0].Text + "]"},
+		})
+	}
 
 	// Send RPC response (turn complete).
 	switch mode {
@@ -286,10 +309,10 @@ func handleSetConfigOption(req *rpcRequest) {
 
 func sendPermissionRequest() {
 	nextID++
-	id := nextID
+	permID := nextID
 	req := map[string]any{
 		"jsonrpc": "2.0",
-		"id":      id,
+		"id":      permID,
 		"method":  "session/request_permission",
 		"params": map[string]any{
 			"sessionId": "mock-session-001",
@@ -309,9 +332,28 @@ func sendPermissionRequest() {
 	}
 	_ = enc.Encode(req)
 
-	// Read the permission response.
-	if scanner.Scan() {
-		// We don't need to process the response for mock purposes.
+	// Read lines until we get a JSON-RPC response matching permID.
+	// Non-matching requests (session/cancel, session/prompt) are buffered
+	// for later processing by the main loop.
+	for scanner.Scan() {
+		var msg struct {
+			ID     *int64 `json:"id,omitempty"`
+			Method string `json:"method,omitempty"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
+			continue
+		}
+		// Response matching our permission request — done.
+		if msg.Method == "" && msg.ID != nil && *msg.ID == permID {
+			return
+		}
+		// Request (has method) — buffer for later.
+		if msg.Method != "" {
+			var buffered rpcRequest
+			if err := json.Unmarshal(scanner.Bytes(), &buffered); err == nil {
+				pendingRequests = append(pendingRequests, &buffered)
+			}
+		}
 	}
 }
 

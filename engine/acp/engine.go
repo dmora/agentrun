@@ -4,6 +4,7 @@ package acp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -154,10 +155,21 @@ func (e *Engine) spawnSubprocess(cwd string, env []string) (*exec.Cmd, io.WriteC
 // wireReadLoop registers handlers on the Conn, starts the dispatch goroutine,
 // and launches ReadLoop in the background. On ReadLoop exit, queued updates
 // are drained and the process is finished.
-func wireReadLoop(conn *Conn, p *process, hitl agentrun.HITL, opts EngineOptions) {
+func wireReadLoop(conn *Conn, p *process, hitl agentrun.HITL, _ EngineOptions) {
+	p.hitl = hitl
+
 	updateCh := make(chan agentrun.Message, updateQueueSize)
 	conn.OnNotification(MethodSessionUpdate, makeUpdateHandler(p, updateCh))
-	conn.OnMethod(MethodRequestPerm, p.makePermissionHandler(hitl, opts))
+
+	// Register a delegating wrapper. The real handler is swapped per-turn
+	// via p.permHandler (atomic pointer). Between turns, a deny-all handler
+	// is installed to prevent stale requests from contaminating the next turn.
+	conn.OnMethod(MethodRequestPerm, func(params json.RawMessage) (any, error) {
+		if h := p.permHandler.Load(); h != nil {
+			return (*h)(params)
+		}
+		return cancelledPermission(), nil // no active turn — cancel
+	})
 	p.conn = conn
 
 	// Dispatch goroutine: drains updateCh → output channel.

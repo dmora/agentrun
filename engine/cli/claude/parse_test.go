@@ -977,6 +977,123 @@ func TestParseLine_ResultWithStopReason(t *testing.T) {
 	}
 }
 
+// --- Permission denials parse tests ---
+
+func TestParseLine_ResultWithDenials(t *testing.T) {
+	b := New()
+	line := `{"type":"result","result":"done","permission_denials":[{"tool":"Bash","reason":"auto-denied"},{"tool":"Write","reason":"not allowed"}],"usage":{"input_tokens":10,"output_tokens":5}}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Type != agentrun.MessageResult {
+		t.Errorf("type = %q, want %q", msg.Type, agentrun.MessageResult)
+	}
+	if len(msg.Denials) != 2 {
+		t.Fatalf("Denials len = %d, want 2", len(msg.Denials))
+	}
+	if msg.Denials[0].Tool != "Bash" || msg.Denials[0].Reason != "auto-denied" {
+		t.Errorf("Denials[0] = %+v, want {Bash, auto-denied}", msg.Denials[0])
+	}
+	if msg.Denials[1].Tool != "Write" || msg.Denials[1].Reason != "not allowed" {
+		t.Errorf("Denials[1] = %+v, want {Write, not allowed}", msg.Denials[1])
+	}
+	// Verify usage is also populated (no interference).
+	if msg.Usage == nil || msg.Usage.InputTokens != 10 {
+		t.Errorf("Usage should be populated alongside denials, got %+v", msg.Usage)
+	}
+}
+
+func TestParseLine_ResultEmptyDenials(t *testing.T) {
+	b := New()
+	line := `{"type":"result","result":"done","permission_denials":[]}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Denials != nil {
+		t.Errorf("Denials should be nil for empty array, got %+v", msg.Denials)
+	}
+}
+
+func TestParseLine_ResultMissingDenials(t *testing.T) {
+	b := New()
+	line := `{"type":"result","result":"done"}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Denials != nil {
+		t.Errorf("Denials should be nil when key absent, got %+v", msg.Denials)
+	}
+}
+
+func TestParseLine_ResultDenialsMalformedEntries(t *testing.T) {
+	b := New()
+	// Array contains a non-object item and a valid entry.
+	line := `{"type":"result","result":"done","permission_denials":["bad",{"tool":"Read","reason":"denied"}]}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msg.Denials) != 1 {
+		t.Fatalf("Denials len = %d, want 1 (malformed entries skipped)", len(msg.Denials))
+	}
+	if msg.Denials[0].Tool != "Read" {
+		t.Errorf("Denials[0].Tool = %q, want Read", msg.Denials[0].Tool)
+	}
+}
+
+func TestParseLine_ResultDenialsControlCharsInTool(t *testing.T) {
+	b := New()
+	// Control char in tool name → sanitized to empty → entry skipped if reason is also empty.
+	line := `{"type":"result","result":"done","permission_denials":[{"tool":"bad\u0000tool","reason":""},{"tool":"Good","reason":"ok"}]}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msg.Denials) != 1 {
+		t.Fatalf("Denials len = %d, want 1 (control-char tool skipped)", len(msg.Denials))
+	}
+	if msg.Denials[0].Tool != "Good" {
+		t.Errorf("Denials[0].Tool = %q, want Good", msg.Denials[0].Tool)
+	}
+}
+
+func TestParseLine_ResultDenialsLongReason(t *testing.T) {
+	b := New()
+	longReason := strings.Repeat("x", errfmt.MaxLen+100)
+	line := fmt.Sprintf(`{"type":"result","result":"done","permission_denials":[{"tool":"T","reason":"%s"}]}`, longReason)
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msg.Denials) != 1 {
+		t.Fatalf("Denials len = %d, want 1", len(msg.Denials))
+	}
+	if len(msg.Denials[0].Reason) > errfmt.MaxLen {
+		t.Errorf("Reason len = %d, should be truncated to %d", len(msg.Denials[0].Reason), errfmt.MaxLen)
+	}
+}
+
+func TestParseLine_ResultDenialsWithStopReason(t *testing.T) {
+	b := New()
+	line := `{"type":"result","result":"done","stop_reason":"end_turn","permission_denials":[{"tool":"Bash","reason":"denied"}],"usage":{"input_tokens":5,"output_tokens":3}}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.StopReason != agentrun.StopEndTurn {
+		t.Errorf("StopReason = %q, want %q", msg.StopReason, agentrun.StopEndTurn)
+	}
+	if len(msg.Denials) != 1 {
+		t.Fatalf("Denials len = %d, want 1", len(msg.Denials))
+	}
+	if msg.Usage == nil {
+		t.Error("Usage should be populated alongside denials and stop_reason")
+	}
+}
+
 // --- Fuzz test ---
 
 func FuzzParseLine(f *testing.F) {
@@ -1008,6 +1125,9 @@ func FuzzParseLine(f *testing.F) {
 		`{"type":"init","session_id":"conv-abc123","model":"claude"}`,
 		`{"type":"system","subtype":"init","session_id":"sess_xyz789"}`,
 		`{"type":"init"}`,
+		`{"type":"result","result":"done","permission_denials":[{"tool":"Bash","reason":"denied"}]}`,
+		`{"type":"result","result":"done","permission_denials":[]}`,
+		`{"type":"result","result":"done","permission_denials":"not_an_array"}`,
 	}
 	for _, s := range seeds {
 		f.Add(s)

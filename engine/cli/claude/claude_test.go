@@ -71,6 +71,7 @@ func TestMapPermission(t *testing.T) {
 		{PermissionAcceptEdits, "acceptEdits", false},
 		{PermissionBypassAll, "bypassPermissions", false},
 		{PermissionPlan, "plan", false},
+		{PermissionDontAsk, "dontAsk", false},
 		{"invalid", "", true},
 		{"", "", true},
 	}

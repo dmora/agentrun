@@ -473,14 +473,12 @@ func TestEngine_Permission_HITLOff(t *testing.T) {
 	}
 
 	msgs := collectUntilResult(proc.Output())
-	hasResult := false
-	for _, m := range msgs {
-		if m.Type == agentrun.MessageResult {
-			hasResult = true
-		}
+	result := findResult(msgs)
+	if result == nil {
+		t.Fatal("expected MessageResult after permission flow")
 	}
-	if !hasResult {
-		t.Error("expected MessageResult after permission flow")
+	if result.Denials != nil {
+		t.Errorf("Denials should be nil with HITL off (auto-approve), got %+v", result.Denials)
 	}
 }
 
@@ -526,14 +524,12 @@ func TestEngine_Permission_WithHandler(t *testing.T) {
 	msgs := collectUntilResult(proc.Output())
 	called.Wait()
 
-	hasResult := false
-	for _, m := range msgs {
-		if m.Type == agentrun.MessageResult {
-			hasResult = true
-		}
+	result := findResult(msgs)
+	if result == nil {
+		t.Fatal("expected MessageResult after permission flow")
 	}
-	if !hasResult {
-		t.Error("expected MessageResult after permission flow")
+	if result.Denials != nil {
+		t.Errorf("Denials should be nil when handler approves, got %+v", result.Denials)
 	}
 }
 
@@ -559,14 +555,12 @@ func TestEngine_Permission_NoHandler(t *testing.T) {
 
 	// Turn should still complete — agent handles denial internally.
 	msgs := collectUntilResult(proc.Output())
-	hasResult := false
-	for _, m := range msgs {
-		if m.Type == agentrun.MessageResult {
-			hasResult = true
-		}
+	result := findResult(msgs)
+	if result == nil {
+		t.Fatal("expected MessageResult after auto-denied permission")
 	}
-	if !hasResult {
-		t.Error("expected MessageResult after auto-denied permission")
+	if len(result.Denials) == 0 {
+		t.Error("Denials should be non-empty when no handler is set (auto-deny)")
 	}
 }
 
@@ -704,14 +698,12 @@ func TestEngine_Permission_PanickingHandler(t *testing.T) {
 	}
 
 	// Turn should still complete.
-	hasResult := false
-	for _, m := range msgs {
-		if m.Type == agentrun.MessageResult {
-			hasResult = true
-		}
+	result := findResult(msgs)
+	if result == nil {
+		t.Fatal("expected MessageResult after panicking handler")
 	}
-	if !hasResult {
-		t.Error("expected MessageResult after panicking handler")
+	if result.Denials != nil {
+		t.Errorf("Denials should be nil for panicking handler (cancelled, not denied), got %+v", result.Denials)
 	}
 }
 
@@ -751,14 +743,112 @@ func TestEngine_Permission_HandlerError(t *testing.T) {
 		t.Error("expected MessageError about handler error")
 	}
 
-	hasResult := false
-	for _, m := range msgs {
-		if m.Type == agentrun.MessageResult {
-			hasResult = true
-		}
+	result := findResult(msgs)
+	if result == nil {
+		t.Fatal("expected MessageResult after handler error")
 	}
-	if !hasResult {
-		t.Error("expected MessageResult after handler error")
+	if result.Denials != nil {
+		t.Errorf("Denials should be nil for handler errors (cancelled, not denied), got %+v", result.Denials)
+	}
+}
+
+func TestEngine_Permission_HandlerDeny(t *testing.T) {
+	wrapper := writeScript(t, "permission")
+	engine := acp.NewEngine(
+		acp.WithBinary(wrapper),
+		acp.WithPermissionHandler(func(_ context.Context, _ acp.PermissionRequest) (bool, error) {
+			return false, nil // explicit deny
+		}),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	defer cancel()
+
+	proc, err := engine.Start(ctx, agentrun.Session{CWD: t.TempDir()})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = proc.Stop(context.Background()) })
+
+	<-proc.Output() // drain init
+
+	if err := proc.Send(ctx, "test"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	msgs := collectUntilResult(proc.Output())
+	result := findResult(msgs)
+	if result == nil {
+		t.Fatal("expected MessageResult after handler deny")
+	}
+	if len(result.Denials) == 0 {
+		t.Error("Denials should be non-empty when handler denies")
+	}
+}
+
+func TestEngine_Send_CancelDuringPermission_NextTurnClean(t *testing.T) {
+	wrapper := writeScript(t, "permission")
+
+	firstHandlerCalled := make(chan struct{})
+	var first sync.Once
+	engine := acp.NewEngine(
+		acp.WithBinary(wrapper),
+		acp.WithPermissionHandler(func(ctx context.Context, _ acp.PermissionRequest) (bool, error) {
+			isFirst := false
+			first.Do(func() {
+				isFirst = true
+				close(firstHandlerCalled)
+			})
+			if isFirst {
+				// Block until context expires — simulates slow external approval.
+				<-ctx.Done()
+				return false, ctx.Err()
+			}
+			// Subsequent calls: approve immediately.
+			return true, nil
+		}),
+		acp.WithPermissionTimeout(500*time.Millisecond),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	defer cancel()
+
+	proc, err := engine.Start(ctx, agentrun.Session{CWD: t.TempDir()})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = proc.Stop(context.Background()) })
+
+	<-proc.Output() // drain init
+
+	// Turn 1: cancel while permission handler is blocked.
+	sendCtx, sendCancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer sendCancel()
+
+	err = proc.Send(sendCtx, "turn 1")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Send turn 1 = %v, want context.DeadlineExceeded", err)
+	}
+
+	// Confirm handler was actually called (turn 1 reached permission flow).
+	<-firstHandlerCalled
+
+	// Turn 2: should complete cleanly.
+	if err := proc.Send(ctx, "turn 2"); err != nil {
+		t.Fatalf("Send turn 2: %v", err)
+	}
+	msgs := collectUntilResult(proc.Output())
+	result := findResult(msgs)
+	if result == nil {
+		t.Fatal("turn 2 missing MessageResult")
+	}
+
+	// Verify this is turn 2's result — the mock echoes prompt text in
+	// permission mode. Without proper ID matching in the mock, turn 1's
+	// result could leak through and this assertion would fail.
+	deltaText := concatContent(msgs, agentrun.MessageTextDelta)
+	if !strings.Contains(deltaText, "[turn 2]") {
+		t.Errorf("expected turn 2 echo in deltas, got %q", deltaText)
 	}
 }
 
