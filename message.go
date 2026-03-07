@@ -186,7 +186,11 @@ const (
 
 // Usage contains token usage data from the agent's model.
 type Usage struct {
-	// InputTokens is the cumulative context window fill.
+	// InputTokens is the number of input tokens consumed by the model for
+	// this interaction. On per-call messages (e.g., assistant events) this
+	// reflects a single API call; on MessageResult it may be cumulative
+	// across all calls in the turn. For derived context-fill estimation,
+	// see ContextUsedTokens.
 	// Always serialized (0 means zero tokens used).
 	InputTokens int `json:"input_tokens"`
 
@@ -223,11 +227,14 @@ type Usage struct {
 	// Sources:
 	//   - MessageContextWindow: authoritative measurement from the agent
 	//     protocol (ACP usage_update).
-	//   - MessageResult: best available estimate derived by the CLI engine
-	//     from per-turn token counts (InputTokens + OutputTokens +
-	//     CacheReadTokens + CacheWriteTokens + ThinkingTokens). Not set
-	//     when all token fields are zero or when the backend already
-	//     provides an authoritative value.
+	//   - MessageResult: best available estimate derived by the CLI engine.
+	//     When per-call usage is available (assistant messages with token
+	//     data), uses the maximum of (InputTokens + CacheReadTokens +
+	//     CacheWriteTokens) across all API calls in the turn — representing
+	//     peak context fill. Falls back to summing all token fields from the
+	//     result event when per-call data is unavailable. Not set when all
+	//     token fields are zero or when the backend already provides an
+	//     authoritative value.
 	ContextUsedTokens int `json:"context_used_tokens,omitempty"`
 }
 
