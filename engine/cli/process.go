@@ -322,6 +322,7 @@ func (p *process) scanLines(ctx context.Context, stdout io.ReadCloser) error {
 	scanner.Buffer(make([]byte, 0, initCap), p.opts.ScannerBuffer)
 
 	var lastStopReason agentrun.StopReason
+	var maxCallFill int
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -330,10 +331,17 @@ func (p *process) scanLines(ctx context.Context, stdout io.ReadCloser) error {
 			continue
 		}
 		if err != nil {
+			// Synthetic error — recoverable parse failure. Do NOT reset
+			// maxCallFill; the turn may still produce a result.
 			msg = agentrun.Message{
 				Type:    agentrun.MessageError,
 				Content: fmt.Sprintf("cli: parse: %v", err),
 			}
+		} else if msg.Type == agentrun.MessageError {
+			// Backend-emitted error — turn abort boundary. Reset the
+			// per-call fill accumulator so it doesn't leak into the
+			// next successful result.
+			maxCallFill = 0
 		}
 		if msg.Timestamp.IsZero() {
 			msg.Timestamp = time.Now()
@@ -343,11 +351,9 @@ func (p *process) scanLines(ctx context.Context, stdout io.ReadCloser) error {
 		if msg.Type == agentrun.MessageInit {
 			msg.Process = p.processMetaSnapshot()
 		}
+		maxCallFill = applyContextFill(&msg, maxCallFill)
 		if msg.Type == agentrun.MessageResult {
 			p.awaitingResult.Store(false)
-			// Derive ContextUsedTokens from token fields when not already
-			// set by the backend. See enrichContextUsed godoc for semantics.
-			enrichContextUsed(msg.Usage)
 		}
 
 		select {
@@ -397,13 +403,58 @@ func (p *process) processMetaSnapshot() *agentrun.ProcessMeta {
 	}
 }
 
-// enrichContextUsed populates ContextUsedTokens on MessageResult when the
-// backend has not already provided a value. Derives context fill from all
-// token fields that accumulate in the context window.
+// callContextFill returns the context fill for a single API call: the sum of
+// input-side token fields (InputTokens + CacheReadTokens + CacheWriteTokens).
+// These represent the full input/context size sent to the model for one call.
+// Returns 0 for nil Usage. Negative individual fields are clamped to zero.
+func callContextFill(u *agentrun.Usage) int {
+	if u == nil {
+		return 0
+	}
+	return max(0, u.InputTokens) + max(0, u.CacheReadTokens) + max(0, u.CacheWriteTokens)
+}
+
+// applyContextFill tracks per-call context fill and enriches MessageResult.
 //
-// Best-effort estimate — see Usage.ContextUsedTokens godoc for semantics.
-// Backends with authoritative context data (ACP) populate the field directly;
-// the no-override guard preserves their value.
+// For non-result messages with Usage, it updates maxCallFill with the peak
+// input-side fill across all API calls in the turn. For MessageResult, it
+// applies the tracked max (when the backend hasn't already set ContextUsedTokens),
+// resets the accumulator for the next turn, and falls back to enrichContextUsed.
+//
+// Also resets on MessageInit (new session). Backend-emitted MessageError
+// (turn abort) is handled by scanLines before calling this function, because
+// scanLines must distinguish backend errors from synthetic parse errors that
+// should NOT reset the accumulator.
+//
+// Returns the (possibly updated or reset) maxCallFill for the next iteration.
+func applyContextFill(msg *agentrun.Message, maxCallFill int) int {
+	if msg.Type == agentrun.MessageInit {
+		return 0
+	}
+	if msg.Usage != nil && msg.Type != agentrun.MessageResult {
+		maxCallFill = max(maxCallFill, callContextFill(msg.Usage))
+	}
+	if msg.Type == agentrun.MessageResult {
+		if maxCallFill > 0 && msg.Usage != nil && msg.Usage.ContextUsedTokens == 0 {
+			msg.Usage.ContextUsedTokens = maxCallFill
+		}
+		enrichContextUsed(msg.Usage)
+		return 0 // reset — turn boundary; prevents stale leak in streamer mode
+	}
+	return maxCallFill
+}
+
+// enrichContextUsed populates ContextUsedTokens on MessageResult when the
+// backend has not already provided a value and per-call max tracking was not
+// available. This is a fallback for backends that only report Usage on the
+// final result (e.g., Codex, OpenCode). When per-call usage is available
+// (e.g., Claude CLI), scanLines applies the per-call max before this function
+// runs, and the no-override guard causes this function to no-op.
+//
+// Derives context fill from all token fields that accumulate in the context
+// window. Best-effort estimate — see Usage.ContextUsedTokens godoc for
+// semantics. Backends with authoritative context data (ACP) populate the
+// field directly; the no-override guard preserves their value.
 //
 // NOTE: intentionally in engine/cli (not engine/internal) — only CLI backends
 // need derived context fill today. Follows wrapExitError inlining precedent.
