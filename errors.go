@@ -22,6 +22,12 @@ var (
 	// Process.Send (no Streamer+InputFormatter or Resumer capability).
 	// Returned by Engine.Start when the backend lacks a send path.
 	ErrSendNotSupported = errors.New("agentrun: send not supported")
+
+	// ErrNoResult indicates the process exited without producing a result
+	// message (MessageResult). This typically means the agent process
+	// terminated before completing its turn. Currently produced only by
+	// CLI engines; ACP turn-completion is handled by RPC response lifecycle.
+	ErrNoResult = errors.New("agentrun: process exited without result")
 )
 
 // ExitError represents a subprocess that exited with a non-zero status.

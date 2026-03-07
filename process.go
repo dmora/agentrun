@@ -37,12 +37,15 @@ type Process interface {
 	Stop(ctx context.Context) error
 
 	// Wait blocks until the session ends naturally.
-	// Returns nil on clean exit, or an error describing the failure.
+	// Returns nil on clean exit with a result message, or an error
+	// describing the failure. CLI engines return [ErrNoResult] when the
+	// subprocess exits without producing a [MessageResult].
 	Wait() error
 
 	// Err returns the terminal error after the Output channel is closed.
-	// Returns nil if the session ended cleanly. Callers should call Err
-	// after the Output channel is closed to distinguish clean exit from
-	// failure.
+	// Returns nil if the session ended cleanly with a result message.
+	// CLI engines return [ErrNoResult] when the subprocess exited without
+	// producing a [MessageResult]. Callers should call Err after the
+	// Output channel is closed to distinguish clean exit from failure.
 	Err() error
 }
