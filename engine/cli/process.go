@@ -174,10 +174,14 @@ func (p *process) sendStdin(message string) error {
 	if stdin == nil {
 		return agentrun.ErrTerminated
 	}
+	// Set before write so a fast subprocess that processes input and emits
+	// MessageResult before sendStdin returns cannot have its Store(false)
+	// overwritten by a late Store(true).
+	p.awaitingResult.Store(true)
 	if _, err := stdin.Write(data); err != nil {
+		p.awaitingResult.Store(false)
 		return fmt.Errorf("cli: write stdin: %w", err)
 	}
-	p.awaitingResult.Store(true)
 	return nil
 }
 
