@@ -70,9 +70,10 @@ type process struct {
 	done    chan struct{} // closed exactly once by finish()
 	termErr error         // set by finish(), read after done closes
 
-	stopping   atomic.Bool
-	stopOnce   sync.Once
-	finishOnce sync.Once
+	awaitingResult atomic.Bool // true when the current turn still owes MessageResult
+	stopping       atomic.Bool
+	stopOnce       sync.Once
+	finishOnce     sync.Once
 }
 
 var _ agentrun.Process = (*process)(nil)
@@ -103,6 +104,7 @@ func newProcess(
 		cmdDone:    make(chan struct{}, 1),
 		done:       make(chan struct{}),
 	}
+	p.awaitingResult.Store(true)
 	go p.readLoop(readCtx, stdout)
 	return p
 }
@@ -172,7 +174,12 @@ func (p *process) sendStdin(message string) error {
 	if stdin == nil {
 		return agentrun.ErrTerminated
 	}
+	// Set before write so a fast subprocess that processes input and emits
+	// MessageResult before sendStdin returns cannot have its Store(false)
+	// overwritten by a late Store(true).
+	p.awaitingResult.Store(true)
 	if _, err := stdin.Write(data); err != nil {
+		p.awaitingResult.Store(false)
 		return fmt.Errorf("cli: write stdin: %w", err)
 	}
 	return nil
@@ -269,6 +276,9 @@ func (p *process) readLoop(ctx context.Context, stdout io.ReadCloser) {
 			waitErr = fmt.Errorf("cli: scanner: %w", scanErr)
 		default:
 			waitErr = wrapExitError(waitErr)
+			if waitErr == nil && p.awaitingResult.Load() {
+				waitErr = agentrun.ErrNoResult
+			}
 		}
 		if p.stopping.Load() {
 			waitErr = agentrun.ErrTerminated
@@ -334,6 +344,7 @@ func (p *process) scanLines(ctx context.Context, stdout io.ReadCloser) error {
 			msg.Process = p.processMetaSnapshot()
 		}
 		if msg.Type == agentrun.MessageResult {
+			p.awaitingResult.Store(false)
 			// Derive ContextUsedTokens from token fields when not already
 			// set by the backend. See enrichContextUsed godoc for semantics.
 			enrichContextUsed(msg.Usage)
@@ -572,5 +583,6 @@ func (p *process) installSubprocess(cmd *exec.Cmd, stdin io.WriteCloser, stdout 
 	p.replacing = false
 	p.mu.Unlock()
 
+	p.awaitingResult.Store(true)
 	go p.readLoop(readCtx, stdout)
 }

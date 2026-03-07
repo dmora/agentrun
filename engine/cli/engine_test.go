@@ -19,10 +19,13 @@ import (
 )
 
 const (
-	binEcho  = "echo"
-	binSleep = "sleep"
-	binBash  = "bash"
-	binCat   = "cat"
+	binEcho   = "echo"
+	binSleep  = "sleep"
+	binBash   = "bash"
+	binCat    = "cat"
+	binPrintf = "printf"
+
+	resultMarker = "__RESULT__"
 )
 
 // ---------------------------------------------------------------------------
@@ -53,6 +56,15 @@ func drain(p agentrun.Process) []agentrun.Message {
 // textParser parses each line as a text message.
 func textParser(line string) (agentrun.Message, error) {
 	return agentrun.Message{Type: agentrun.MessageText, Content: line}, nil
+}
+
+// resultParser extends textParser: the magic line resultMarker is parsed as
+// MessageResult; all other lines delegate to textParser.
+func resultParser(line string) (agentrun.Message, error) {
+	if line == resultMarker {
+		return agentrun.Message{Type: agentrun.MessageResult}, nil
+	}
+	return textParser(line)
 }
 
 // ---------------------------------------------------------------------------
@@ -129,9 +141,16 @@ func echoBackend() *testBackend {
 }
 
 // echoResumerBackend returns a backend with Resumer capability that spawns
-// "echo" with session.Prompt. Satisfies Start()'s send capability requirement.
+// printf to emit session.Prompt + __RESULT__ marker, satisfying the
+// ErrNoResult invariant. Satisfies Start()'s send capability requirement.
 func echoResumerBackend() *testResumerBackend {
-	return withResumer(*echoBackend())
+	tb := testBackend{
+		spawnFn: func(s agentrun.Session) (string, []string) {
+			return binPrintf, []string{"%s\\n__RESULT__\\n", s.Prompt}
+		},
+		parseFn: resultParser,
+	}
+	return withResumer(tb)
 }
 
 // withResumer wraps a testBackend with Resumer capability, using spawnFn
@@ -219,8 +238,8 @@ func TestStart_Echo(t *testing.T) {
 	}
 
 	msgs := drain(p)
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(msgs))
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgs))
 	}
 	if msgs[0].Content != "hello" {
 		t.Fatalf("expected 'hello', got %q", msgs[0].Content)
@@ -233,9 +252,9 @@ func TestStart_Echo(t *testing.T) {
 func TestStart_MultiLine(t *testing.T) {
 	b := withResumer(testBackend{
 		spawnFn: func(_ agentrun.Session) (string, []string) {
-			return "printf", []string{"line1\nline2\nline3\n"}
+			return binPrintf, []string{"line1\nline2\nline3\n__RESULT__\n"}
 		},
-		parseFn: textParser,
+		parseFn: resultParser,
 	})
 	eng := cli.NewEngine(b)
 	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t)})
@@ -244,8 +263,8 @@ func TestStart_MultiLine(t *testing.T) {
 	}
 
 	msgs := drain(p)
-	if len(msgs) != 3 {
-		t.Fatalf("expected 3 messages, got %d: %v", len(msgs), msgs)
+	if len(msgs) != 4 {
+		t.Fatalf("expected 4 messages, got %d: %v", len(msgs), msgs)
 	}
 }
 
@@ -278,9 +297,9 @@ func TestStart_OptionOverrides(t *testing.T) {
 			b := withResumer(testBackend{
 				spawnFn: func(s agentrun.Session) (string, []string) {
 					captured = tt.extract(s)
-					return binEcho, []string{"x"}
+					return binPrintf, []string{"x\\n__RESULT__\\n"}
 				},
-				parseFn: textParser,
+				parseFn: resultParser,
 			})
 			tt.session.CWD = tempDir(t)
 			eng := cli.NewEngine(b)
@@ -357,8 +376,8 @@ func TestOutput_ClosedAfterExit(t *testing.T) {
 	for range p.Output() {
 		count++
 	}
-	if count != 1 {
-		t.Fatalf("expected 1, got %d", count)
+	if count != 2 {
+		t.Fatalf("expected 2, got %d", count)
 	}
 }
 
@@ -636,10 +655,10 @@ func TestSend_Resume(t *testing.T) {
 				// Long-lived: outputs "initial" then waits for SIGTERM.
 				return binBash, []string{"-c", "echo initial; sleep 60"}
 			},
-			parseFn: textParser,
+			parseFn: resultParser,
 		},
 		resumeFn: func(_ agentrun.Session, prompt string) (string, []string, error) {
-			return binEcho, []string{prompt}, nil
+			return binPrintf, []string{"%s\\n__RESULT__\\n", prompt}, nil
 		},
 	}
 	eng := cli.NewEngine(b)
@@ -879,12 +898,12 @@ func TestResumeAfterCleanExit_HappyPath(t *testing.T) {
 	b := &testResumerBackend{
 		testBackend: testBackend{
 			spawnFn: func(s agentrun.Session) (string, []string) {
-				return binEcho, []string{s.Prompt}
+				return binPrintf, []string{"%s\\n__RESULT__\\n", s.Prompt}
 			},
-			parseFn: textParser,
+			parseFn: resultParser,
 		},
 		resumeFn: func(_ agentrun.Session, prompt string) (string, []string, error) {
-			return binEcho, []string{prompt}, nil
+			return binPrintf, []string{"%s\\n__RESULT__\\n", prompt}, nil
 		},
 	}
 	eng := cli.NewEngine(b)
@@ -895,8 +914,8 @@ func TestResumeAfterCleanExit_HappyPath(t *testing.T) {
 
 	// First turn: drain output, subprocess exits cleanly.
 	msgs := drain(p)
-	if len(msgs) != 1 || msgs[0].Content != "turn1" {
-		t.Fatalf("turn1: expected [turn1], got %v", msgs)
+	if len(msgs) != 2 || msgs[0].Content != "turn1" {
+		t.Fatalf("turn1: expected [turn1, result], got %v", msgs)
 	}
 
 	// Second turn: Send triggers resumeAfterCleanExit (done closed, termErr nil).
@@ -904,8 +923,8 @@ func TestResumeAfterCleanExit_HappyPath(t *testing.T) {
 		t.Fatalf("Send turn2: %v", err)
 	}
 	msgs = drain(p)
-	if len(msgs) != 1 || msgs[0].Content != "turn2" {
-		t.Fatalf("turn2: expected [turn2], got %v", msgs)
+	if len(msgs) != 2 || msgs[0].Content != "turn2" {
+		t.Fatalf("turn2: expected [turn2, result], got %v", msgs)
 	}
 
 	// Third turn: another round to verify stability across multiple resumes.
@@ -913,8 +932,8 @@ func TestResumeAfterCleanExit_HappyPath(t *testing.T) {
 		t.Fatalf("Send turn3: %v", err)
 	}
 	msgs = drain(p)
-	if len(msgs) != 1 || msgs[0].Content != "turn3" {
-		t.Fatalf("turn3: expected [turn3], got %v", msgs)
+	if len(msgs) != 2 || msgs[0].Content != "turn3" {
+		t.Fatalf("turn3: expected [turn3, result], got %v", msgs)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -926,12 +945,12 @@ func TestResumeAfterCleanExit_OutputChannelSwap(t *testing.T) {
 	b := &testResumerBackend{
 		testBackend: testBackend{
 			spawnFn: func(s agentrun.Session) (string, []string) {
-				return binEcho, []string{s.Prompt}
+				return binPrintf, []string{"%s\\n__RESULT__\\n", s.Prompt}
 			},
-			parseFn: textParser,
+			parseFn: resultParser,
 		},
 		resumeFn: func(_ agentrun.Session, prompt string) (string, []string, error) {
-			return binEcho, []string{prompt}, nil
+			return binPrintf, []string{"%s\\n__RESULT__\\n", prompt}, nil
 		},
 	}
 	eng := cli.NewEngine(b)
@@ -970,9 +989,9 @@ func TestResumeAfterCleanExit_ResumeArgsError(t *testing.T) {
 	b := &testResumerBackend{
 		testBackend: testBackend{
 			spawnFn: func(s agentrun.Session) (string, []string) {
-				return binEcho, []string{s.Prompt}
+				return binPrintf, []string{"%s\\n__RESULT__\\n", s.Prompt}
 			},
-			parseFn: textParser,
+			parseFn: resultParser,
 		},
 		resumeFn: func(_ agentrun.Session, _ string) (string, []string, error) {
 			return "", nil, errors.New("no session ID")
@@ -998,9 +1017,9 @@ func TestResumeAfterCleanExit_BinaryNotFound(t *testing.T) {
 	b := &testResumerBackend{
 		testBackend: testBackend{
 			spawnFn: func(s agentrun.Session) (string, []string) {
-				return binEcho, []string{s.Prompt}
+				return binPrintf, []string{"%s\\n__RESULT__\\n", s.Prompt}
 			},
-			parseFn: textParser,
+			parseFn: resultParser,
 		},
 		resumeFn: func(_ agentrun.Session, _ string) (string, []string, error) {
 			return "nonexistent-binary-xyz-999", nil, nil
@@ -1026,12 +1045,12 @@ func TestResumeAfterCleanExit_ContextCanceled(t *testing.T) {
 	b := &testResumerBackend{
 		testBackend: testBackend{
 			spawnFn: func(s agentrun.Session) (string, []string) {
-				return binEcho, []string{s.Prompt}
+				return binPrintf, []string{"%s\\n__RESULT__\\n", s.Prompt}
 			},
-			parseFn: textParser,
+			parseFn: resultParser,
 		},
 		resumeFn: func(_ agentrun.Session, prompt string) (string, []string, error) {
-			return binEcho, []string{prompt}, nil
+			return binPrintf, []string{"%s\\n__RESULT__\\n", prompt}, nil
 		},
 	}
 	eng := cli.NewEngine(b)
@@ -1062,9 +1081,12 @@ func TestResumeAfterCleanExit_ContextCanceled(t *testing.T) {
 func TestReadLoop_SkipLine(t *testing.T) {
 	b := withResumer(testBackend{
 		spawnFn: func(_ agentrun.Session) (string, []string) {
-			return "printf", []string{"keep\nskip\nkeep2\n"}
+			return binPrintf, []string{"keep\nskip\nkeep2\n__RESULT__\n"}
 		},
 		parseFn: func(line string) (agentrun.Message, error) {
+			if line == resultMarker {
+				return agentrun.Message{Type: agentrun.MessageResult}, nil
+			}
 			if line == "skip" {
 				return agentrun.Message{}, cli.ErrSkipLine
 			}
@@ -1078,8 +1100,8 @@ func TestReadLoop_SkipLine(t *testing.T) {
 	}
 
 	msgs := drain(p)
-	if len(msgs) != 2 {
-		t.Fatalf("expected 2 messages (skip filtered), got %d", len(msgs))
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 messages (skip filtered), got %d", len(msgs))
 	}
 	if msgs[0].Content != "keep" || msgs[1].Content != "keep2" {
 		t.Fatalf("unexpected messages: %v", msgs)
@@ -1122,8 +1144,8 @@ func TestReadLoop_Timestamp(t *testing.T) {
 	}
 
 	msgs := drain(p)
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(msgs))
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgs))
 	}
 	if msgs[0].Timestamp.Before(before) {
 		t.Fatalf("timestamp %v is before start time %v", msgs[0].Timestamp, before)
@@ -1133,9 +1155,12 @@ func TestReadLoop_Timestamp(t *testing.T) {
 func TestReadLoop_SessionIDPreserved(t *testing.T) {
 	b := withResumer(testBackend{
 		spawnFn: func(_ agentrun.Session) (string, []string) {
-			return binEcho, []string{"init_line"}
+			return binPrintf, []string{"init_line\n__RESULT__\n"}
 		},
-		parseFn: func(_ string) (agentrun.Message, error) {
+		parseFn: func(line string) (agentrun.Message, error) {
+			if line == resultMarker {
+				return agentrun.Message{Type: agentrun.MessageResult}, nil
+			}
 			return agentrun.Message{
 				Type:     agentrun.MessageInit,
 				ResumeID: "ses_test123",
@@ -1149,14 +1174,181 @@ func TestReadLoop_SessionIDPreserved(t *testing.T) {
 	}
 
 	msgs := drain(p)
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(msgs))
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgs))
 	}
 	if msgs[0].Type != agentrun.MessageInit {
 		t.Fatalf("expected MessageInit, got %v", msgs[0].Type)
 	}
 	if msgs[0].ResumeID != "ses_test123" {
 		t.Fatalf("ResumeID = %q, want %q (session ID must survive readLoop)", msgs[0].ResumeID, "ses_test123")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ErrNoResult tests
+// ---------------------------------------------------------------------------
+
+func TestReadLoop_NoResult_ReturnsErrNoResult(t *testing.T) {
+	// Subprocess emits text only (no MessageResult), exits code 0 → ErrNoResult.
+	b := withResumer(testBackend{
+		spawnFn: func(_ agentrun.Session) (string, []string) {
+			return binEcho, []string{"hello"}
+		},
+		parseFn: textParser,
+	})
+	eng := cli.NewEngine(b)
+	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t)})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	drain(p)
+
+	if !errors.Is(p.Wait(), agentrun.ErrNoResult) {
+		t.Fatalf("Wait() = %v, want ErrNoResult", p.Err())
+	}
+}
+
+func TestReadLoop_WithResult_NoError(t *testing.T) {
+	// Subprocess emits MessageResult, exits code 0 → no error (regression guard).
+	b := withResumer(testBackend{
+		spawnFn: func(_ agentrun.Session) (string, []string) {
+			return binPrintf, []string{"hello\\n__RESULT__\\n"}
+		},
+		parseFn: resultParser,
+	})
+	eng := cli.NewEngine(b)
+	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t)})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	drain(p)
+
+	if err := p.Wait(); err != nil {
+		t.Fatalf("Wait() = %v, want nil", err)
+	}
+}
+
+func TestReadLoop_NoResult_NonZeroExit(t *testing.T) {
+	// Subprocess emits no result, exits code 1 → *ExitError (not ErrNoResult).
+	b := withResumer(testBackend{
+		spawnFn: func(_ agentrun.Session) (string, []string) {
+			return binBash, []string{"-c", "echo hello; exit 1"}
+		},
+		parseFn: textParser,
+	})
+	eng := cli.NewEngine(b)
+	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t)})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	drain(p)
+
+	waitErr := p.Wait()
+	if errors.Is(waitErr, agentrun.ErrNoResult) {
+		t.Fatal("Wait() should return *ExitError, not ErrNoResult")
+	}
+	code, ok := agentrun.ExitCode(waitErr)
+	if !ok || code != 1 {
+		t.Fatalf("ExitCode = (%d, %v), want (1, true)", code, ok)
+	}
+}
+
+func TestReadLoop_NoResult_Stopped(t *testing.T) {
+	// Subprocess emits no result, Stop() called → ErrTerminated (stopping override wins).
+	b := withResumer(testBackend{
+		spawnFn: func(_ agentrun.Session) (string, []string) {
+			return binSleep, []string{"60"}
+		},
+		parseFn: textParser,
+	})
+	eng := cli.NewEngine(b)
+	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t)})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = p.Stop(ctx)
+
+	if !errors.Is(p.Err(), agentrun.ErrTerminated) {
+		t.Fatalf("Err() = %v, want ErrTerminated", p.Err())
+	}
+}
+
+func TestReadLoop_NoResult_ResumerSendFails(t *testing.T) {
+	// Resumer backend: subprocess exits without result → Send returns ErrTerminated.
+	b := &testResumerBackend{
+		testBackend: testBackend{
+			spawnFn: func(s agentrun.Session) (string, []string) {
+				return binEcho, []string{s.Prompt}
+			},
+			parseFn: textParser,
+		},
+		resumeFn: func(_ agentrun.Session, prompt string) (string, []string, error) {
+			return binEcho, []string{prompt}, nil
+		},
+	}
+	eng := cli.NewEngine(b)
+	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t), Prompt: "turn1"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	drain(p)
+
+	// Wait for process to finish so Send sees the done channel.
+	_ = p.Wait()
+
+	// Send should return ErrTerminated because termErr is ErrNoResult (non-nil).
+	err = p.Send(testCtx(t), "turn2")
+	if !errors.Is(err, agentrun.ErrTerminated) {
+		t.Fatalf("Send after ErrNoResult = %v, want ErrTerminated", err)
+	}
+}
+
+func TestReadLoop_NoResult_StreamerMultiTurn(t *testing.T) {
+	// Streamer backend: turn 1 emits a result, turn 2 emits text only and
+	// exits cleanly. Wait should report ErrNoResult for the unfinished turn.
+	script := `read first || exit 0; echo __RESULT__; read second || exit 0; echo no-result-line`
+	b := &testStreamerBackend{
+		testBackend: testBackend{
+			spawnFn: func(_ agentrun.Session) (string, []string) {
+				return binBash, []string{"-c", script}
+			},
+			parseFn: resultParser,
+		},
+		streamFn: func(_ agentrun.Session) (string, []string) {
+			return binBash, []string{"-c", script}
+		},
+		formatFn: func(msg string) ([]byte, error) { return []byte(msg + "\n"), nil },
+	}
+	eng := cli.NewEngine(b)
+	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t)})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// Turn 1: send triggers FormatInput which writes __RESULT__\n.
+	if err := p.Send(testCtx(t), "turn1"); err != nil {
+		t.Fatalf("Send turn1: %v", err)
+	}
+	msg := <-p.Output()
+	if msg.Type != agentrun.MessageResult {
+		t.Fatalf("turn1: expected MessageResult, got %v", msg.Type)
+	}
+
+	// Turn 2: send triggers FormatInput which writes text only (no result).
+	if err := p.Send(testCtx(t), "turn2"); err != nil {
+		t.Fatalf("Send turn2: %v", err)
+	}
+	msg = <-p.Output()
+	if msg.Content != "no-result-line" {
+		t.Fatalf("turn2: expected 'no-result-line', got %q", msg.Content)
+	}
+
+	if err := p.Wait(); !errors.Is(err, agentrun.ErrNoResult) {
+		t.Fatalf("Wait() = %v, want ErrNoResult", err)
 	}
 }
 
@@ -1201,9 +1393,9 @@ func TestStart_OptionResumeID_SpawnArgs(t *testing.T) {
 	b := withResumer(testBackend{
 		spawnFn: func(s agentrun.Session) (string, []string) {
 			capturedSession = s
-			return binEcho, []string{"x"}
+			return binPrintf, []string{"x\\n__RESULT__\\n"}
 		},
-		parseFn: textParser,
+		parseFn: resultParser,
 	})
 	eng := cli.NewEngine(b)
 	p, err := eng.Start(testCtx(t), agentrun.Session{
@@ -1226,13 +1418,13 @@ func TestResumeAfterCleanExit_OptionResumeID(t *testing.T) {
 	b := &testResumerBackend{
 		testBackend: testBackend{
 			spawnFn: func(s agentrun.Session) (string, []string) {
-				return binEcho, []string{s.Prompt}
+				return binPrintf, []string{"%s\\n__RESULT__\\n", s.Prompt}
 			},
-			parseFn: textParser,
+			parseFn: resultParser,
 		},
 		resumeFn: func(s agentrun.Session, prompt string) (string, []string, error) {
 			resumeSession = s
-			return binEcho, []string{prompt}, nil
+			return binPrintf, []string{"%s\\n__RESULT__\\n", prompt}, nil
 		},
 	}
 	eng := cli.NewEngine(b)
@@ -1632,7 +1824,7 @@ func TestExitCode_NonZeroExit(t *testing.T) {
 	}
 }
 
-func TestExitCode_CleanExit(t *testing.T) {
+func TestExitCode_CleanExitNoResult(t *testing.T) {
 	eng := cli.NewEngine(exitBackend(0))
 	proc, err := eng.Start(testCtx(t), agentrun.Session{
 		CWD:    tempDir(t),
@@ -1645,10 +1837,10 @@ func TestExitCode_CleanExit(t *testing.T) {
 
 	code, ok := agentrun.ExitCode(proc.Err())
 	if ok {
-		t.Errorf("ExitCode should be (0, false) for clean exit, got (%d, true)", code)
+		t.Errorf("ExitCode should be (0, false) for ErrNoResult, got (%d, true)", code)
 	}
-	if proc.Err() != nil {
-		t.Errorf("proc.Err() = %v, want nil for clean exit", proc.Err())
+	if !errors.Is(proc.Err(), agentrun.ErrNoResult) {
+		t.Errorf("proc.Err() = %v, want ErrNoResult for clean exit without result", proc.Err())
 	}
 }
 
@@ -1715,9 +1907,12 @@ func TestProcessMeta_OnInit(t *testing.T) {
 	backend := &testResumerBackend{
 		testBackend: testBackend{
 			spawnFn: func(_ agentrun.Session) (string, []string) {
-				return binBash, []string{"-c", `echo '{"type":"init"}'; echo '{"type":"text","content":"hello"}'`}
+				return binBash, []string{"-c", `echo '{"type":"init"}'; echo '{"type":"text","content":"hello"}'; echo '__RESULT__'`}
 			},
 			parseFn: func(line string) (agentrun.Message, error) {
+				if line == resultMarker {
+					return agentrun.Message{Type: agentrun.MessageResult}, nil
+				}
 				if strings.Contains(line, "init") {
 					return agentrun.Message{Type: agentrun.MessageInit}, nil
 				}

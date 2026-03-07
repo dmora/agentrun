@@ -93,6 +93,7 @@ func TestSentinelErrors_Identity(t *testing.T) {
 		{"ErrTerminated", ErrTerminated},
 		{"ErrSessionNotFound", ErrSessionNotFound},
 		{"ErrSendNotSupported", ErrSendNotSupported},
+		{"ErrNoResult", ErrNoResult},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -112,6 +113,7 @@ func TestSentinelErrors_Wrapping(t *testing.T) {
 		{"ErrTerminated", ErrTerminated},
 		{"ErrSessionNotFound", ErrSessionNotFound},
 		{"ErrSendNotSupported", ErrSendNotSupported},
+		{"ErrNoResult", ErrNoResult},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -125,14 +127,13 @@ func TestSentinelErrors_Wrapping(t *testing.T) {
 }
 
 func TestSentinelErrors_Distinct(t *testing.T) {
-	if errors.Is(ErrUnavailable, ErrTerminated) {
-		t.Fatal("ErrUnavailable should not match ErrTerminated")
-	}
-	if errors.Is(ErrUnavailable, ErrSessionNotFound) {
-		t.Fatal("ErrUnavailable should not match ErrSessionNotFound")
-	}
-	if errors.Is(ErrTerminated, ErrSessionNotFound) {
-		t.Fatal("ErrTerminated should not match ErrSessionNotFound")
+	sentinels := []error{ErrUnavailable, ErrTerminated, ErrSessionNotFound, ErrSendNotSupported, ErrNoResult}
+	for i, a := range sentinels {
+		for j, b := range sentinels {
+			if i != j && errors.Is(a, b) {
+				t.Fatalf("%v should not match %v", a, b)
+			}
+		}
 	}
 }
 

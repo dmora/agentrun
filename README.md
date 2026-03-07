@@ -216,6 +216,7 @@ Sentinel errors for engine operations:
 | `ErrUnavailable` | Engine cannot start (binary not found, API unreachable) |
 | `ErrTerminated` | Session was terminated (`Stop()` called, connection closed) |
 | `ErrSendNotSupported` | Backend lacks Send capability |
+| `ErrNoResult`        | Process exited without producing a result (CLI engines only) |
 
 Subprocess exit codes are wrapped in `*ExitError`. Use `ExitCode()` to extract:
 

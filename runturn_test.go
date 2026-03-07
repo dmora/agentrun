@@ -168,6 +168,27 @@ func TestRunTurn_SendSucceedsBeforeResult(t *testing.T) {
 	}
 }
 
+func TestRunTurn_ErrNoResult(t *testing.T) {
+	// Channel closes without MessageResult while termErr is ErrNoResult.
+	// RunTurn should surface ErrNoResult via proc.Err().
+	mp := newMockProcess()
+	mp.termErr = ErrNoResult
+	mp.output <- Message{Type: MessageText, Content: "partial"}
+	mp.close()
+
+	var msgs []Message
+	err := RunTurn(context.Background(), mp, "prompt", func(msg Message) error {
+		msgs = append(msgs, msg)
+		return nil
+	})
+	if !errors.Is(err, ErrNoResult) {
+		t.Fatalf("RunTurn err = %v, want ErrNoResult", err)
+	}
+	if len(msgs) != 1 || msgs[0].Content != "partial" {
+		t.Fatalf("msgs = %v, want [{partial}]", msgs)
+	}
+}
+
 func TestRunTurn_MessagePassthrough(t *testing.T) {
 	mp := newMockProcess()
 	const wantMessage = "the user prompt"
