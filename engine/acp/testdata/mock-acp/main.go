@@ -19,6 +19,7 @@
 //	ACP_MOCK_MODE=exit-42           — respond to prompt then exit with code 42 (for ExitError test)
 //	ACP_MOCK_MODE=rich-usage        — respond with extended usage (cache, thinking tokens)
 //	ACP_MOCK_MODE=no-usage          — respond with no usage at all (nil)
+//	ACP_MOCK_MODE=oversized-line    — emit an oversized notification line after session/new
 package main
 
 import (
@@ -26,6 +27,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -140,6 +142,15 @@ func handleSessionNew(req *rpcRequest) {
 			},
 		},
 	})
+
+	// Emit an oversized notification line after session/new to trigger ErrLineTooLong.
+	if mode == "oversized-line" {
+		bigData := strings.Repeat("X", 8192)
+		line := fmt.Sprintf(`{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"%s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"%s"}}}}`, sessionID, bigData)
+		fmt.Fprintln(os.Stdout, line)
+		// Keep running so the engine can observe the error and kill us.
+		select {}
+	}
 }
 
 func handleSessionLoad(req *rpcRequest) {

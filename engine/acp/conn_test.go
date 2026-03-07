@@ -690,6 +690,105 @@ func FuzzConn_DecodeMessage(f *testing.F) {
 	})
 }
 
+func TestConn_LargeMessage(t *testing.T) {
+	// Message larger than internal buffer (4096 default) but within maxMessageSize.
+	pr, pw := io.Pipe()
+	conn := newConn(pr, io.Discard, connConfig{maxMessageSize: 1 << 20})
+
+	received := make(chan json.RawMessage, 1)
+	conn.OnNotification("big", func(params json.RawMessage) {
+		received <- params
+	})
+	go conn.ReadLoop()
+
+	// Build a large notification with a big params payload.
+	bigPayload := strings.Repeat("x", 8192)
+	msg := fmt.Sprintf(`{"jsonrpc":"2.0","method":"big","params":{"data":"%s"}}`, bigPayload)
+	go func() {
+		_, _ = pw.Write([]byte(msg + "\n"))
+		pw.Close()
+	}()
+
+	select {
+	case params := <-received:
+		var p map[string]string
+		if err := json.Unmarshal(params, &p); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if p["data"] != bigPayload {
+			t.Errorf("payload len = %d, want %d", len(p["data"]), len(bigPayload))
+		}
+	case <-time.After(testTimeout):
+		t.Fatal("timeout waiting for large notification")
+	}
+
+	<-conn.Done()
+	pr.Close()
+}
+
+func TestConn_MaxMessageSizeExceeded(t *testing.T) {
+	pr, pw := io.Pipe()
+	// Set a small maxMessageSize — message will exceed it.
+	conn := newConn(pr, io.Discard, connConfig{maxMessageSize: 100})
+	go conn.ReadLoop()
+
+	// Send a message larger than 100 bytes.
+	bigMsg := fmt.Sprintf(`{"jsonrpc":"2.0","method":"test","params":{"data":"%s"}}`, strings.Repeat("A", 200))
+	go func() {
+		_, _ = pw.Write([]byte(bigMsg + "\n"))
+		pw.Close()
+	}()
+
+	<-conn.Done()
+	err := conn.Err()
+	if err == nil {
+		t.Fatal("expected error from oversized message")
+	}
+	if !strings.Contains(err.Error(), "line too long") {
+		t.Errorf("error = %v, want to contain 'line too long'", err)
+	}
+	pr.Close()
+}
+
+func TestConn_MaxMessageSizeZero_Unlimited(t *testing.T) {
+	pr, pw := io.Pipe()
+	// maxMessageSize=0 → unlimited.
+	conn := newConn(pr, io.Discard, connConfig{maxMessageSize: 0})
+
+	received := make(chan json.RawMessage, 1)
+	conn.OnNotification("big", func(params json.RawMessage) {
+		received <- params
+	})
+	go conn.ReadLoop()
+
+	// Send a large message — should succeed with unlimited.
+	bigPayload := strings.Repeat("B", 50000)
+	msg := fmt.Sprintf(`{"jsonrpc":"2.0","method":"big","params":{"data":"%s"}}`, bigPayload)
+	go func() {
+		_, _ = pw.Write([]byte(msg + "\n"))
+		pw.Close()
+	}()
+
+	select {
+	case params := <-received:
+		var p map[string]string
+		if err := json.Unmarshal(params, &p); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if p["data"] != bigPayload {
+			t.Errorf("payload len = %d, want %d", len(p["data"]), len(bigPayload))
+		}
+	case <-time.After(testTimeout):
+		t.Fatal("timeout waiting for unlimited large notification")
+	}
+
+	<-conn.Done()
+	if err := conn.Err(); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	pr.Close()
+}
+
 // asRPCError extracts an *RPCError from err.
 func asRPCError(err error) (*RPCError, bool) {
 	var rpcErr *RPCError

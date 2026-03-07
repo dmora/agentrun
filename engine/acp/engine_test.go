@@ -1129,3 +1129,37 @@ func TestProcessMeta_ACP_OnInit(t *testing.T) {
 		t.Error("Binary should not be empty")
 	}
 }
+
+func TestEngine_OversizedMessage(t *testing.T) {
+	wrapper := writeScript(t, "oversized-line")
+	// MaxMessageSize=2048 — large enough for handshake but the mock emits
+	// an 8 KB+ notification line, triggering ErrLineTooLong.
+	engine := acp.NewEngine(
+		acp.WithBinary(wrapper),
+		acp.WithMaxMessageSize(2048),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	defer cancel()
+
+	proc, err := engine.Start(ctx, agentrun.Session{CWD: t.TempDir()})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	// Drain all output — the oversized line should cause the process to terminate.
+	msgs := collectMessages(proc.Output())
+	_ = msgs // we don't need to inspect individual messages
+
+	// Wait() should return the read error, NOT ErrTerminated.
+	waitErr := proc.Wait()
+	if waitErr == nil {
+		t.Fatal("expected error from oversized message")
+	}
+	if errors.Is(waitErr, agentrun.ErrTerminated) {
+		t.Fatal("error should not be ErrTerminated — this is a read failure, not user-initiated stop")
+	}
+	if !strings.Contains(waitErr.Error(), "line too long") {
+		t.Errorf("error = %v, want to contain 'line too long'", waitErr)
+	}
+}

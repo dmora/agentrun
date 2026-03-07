@@ -4,9 +4,9 @@ import "time"
 
 // Default engine configuration values.
 const (
-	defaultOutputBuffer  = 100
-	defaultScannerBuffer = 1 << 20 // 1 MB
-	defaultGracePeriod   = 5 * time.Second
+	defaultOutputBuffer = 100
+	defaultMaxLineSize  = 128 << 20 // 128 MB
+	defaultGracePeriod  = 5 * time.Second
 )
 
 // EngineOptions holds resolved construction-time configuration for a CLI engine.
@@ -15,8 +15,9 @@ type EngineOptions struct {
 	// OutputBuffer is the channel buffer size for process output messages.
 	OutputBuffer int
 
-	// ScannerBuffer is the maximum line size in bytes for the stdout scanner.
-	ScannerBuffer int
+	// MaxLineSize is the maximum assembled line size in bytes for stdout reading.
+	// Zero or negative means unlimited. The default is 128 MB.
+	MaxLineSize int
 
 	// GracePeriod is the duration to wait after SIGTERM before sending SIGKILL.
 	GracePeriod time.Duration
@@ -35,14 +36,21 @@ func WithOutputBuffer(size int) EngineOption {
 	}
 }
 
-// WithScannerBuffer sets the maximum line size in bytes for the stdout scanner.
-// Values <= 0 are ignored.
-func WithScannerBuffer(size int) EngineOption {
+// WithMaxLineSize sets the maximum line size in bytes for stdout reading.
+// Zero or negative means unlimited. The default is 128 MB.
+func WithMaxLineSize(size int) EngineOption {
 	return func(o *EngineOptions) {
-		if size > 0 {
-			o.ScannerBuffer = size
-		}
+		o.MaxLineSize = size
 	}
+}
+
+// Deprecated: WithScannerBuffer is an alias for [WithMaxLineSize].
+// Values <= 0 are ignored to preserve backwards compatibility.
+func WithScannerBuffer(size int) EngineOption {
+	if size <= 0 {
+		return func(*EngineOptions) {} // no-op, matches old behavior
+	}
+	return WithMaxLineSize(size)
 }
 
 // WithGracePeriod sets the duration to wait after SIGTERM before sending SIGKILL.
@@ -57,9 +65,9 @@ func WithGracePeriod(d time.Duration) EngineOption {
 
 func resolveEngineOptions(opts ...EngineOption) EngineOptions {
 	o := EngineOptions{
-		OutputBuffer:  defaultOutputBuffer,
-		ScannerBuffer: defaultScannerBuffer,
-		GracePeriod:   defaultGracePeriod,
+		OutputBuffer: defaultOutputBuffer,
+		MaxLineSize:  defaultMaxLineSize,
+		GracePeriod:  defaultGracePeriod,
 	}
 	for _, opt := range opts {
 		if opt != nil {

@@ -39,7 +39,7 @@ func runScanLinesWithParser(t *testing.T, lineCount int, parseFn func(string) (a
 
 	p := &process{
 		backend: backend,
-		opts:    EngineOptions{ScannerBuffer: 64 * 1024},
+		opts:    EngineOptions{MaxLineSize: 0},
 		output:  make(chan agentrun.Message, 64),
 	}
 	done := make(chan error, 1)
