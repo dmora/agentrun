@@ -445,8 +445,14 @@ func callContextFill(u *agentrun.Usage) int {
 //
 // For non-result messages with Usage, it updates maxCallFill with the peak
 // input-side fill across all API calls in the turn. For MessageResult, it
-// applies the tracked max (when the backend hasn't already set ContextUsedTokens),
-// resets the accumulator for the next turn, and falls back to enrichContextUsed.
+// applies the tracked max (when the backend hasn't already set ContextUsedTokens)
+// and resets the accumulator for the next turn.
+//
+// When no per-call usage is available (e.g., Codex, OpenCode — which only
+// report usage on the result event), ContextUsedTokens remains 0 ("not
+// reported" per omitempty semantics). This is intentional: the CLI engine
+// lacks trustworthy per-call data for these backends, and fabricating a
+// value from result-level totals would produce incorrect estimates.
 //
 // Also resets on MessageInit (new session). Backend-emitted MessageError
 // (turn abort) is handled by scanLines before calling this function, because
@@ -465,39 +471,9 @@ func applyContextFill(msg *agentrun.Message, maxCallFill int) int {
 		if maxCallFill > 0 && msg.Usage != nil && msg.Usage.ContextUsedTokens == 0 {
 			msg.Usage.ContextUsedTokens = maxCallFill
 		}
-		enrichContextUsed(msg.Usage)
 		return 0 // reset — turn boundary; prevents stale leak in streamer mode
 	}
 	return maxCallFill
-}
-
-// enrichContextUsed populates ContextUsedTokens on MessageResult when the
-// backend has not already provided a value and per-call max tracking was not
-// available. This is a fallback for backends that only report Usage on the
-// final result (e.g., Codex, OpenCode). When per-call usage is available
-// (e.g., Claude CLI), scanLines applies the per-call max before this function
-// runs, and the no-override guard causes this function to no-op.
-//
-// Derives context fill from all token fields that accumulate in the context
-// window. Best-effort estimate — see Usage.ContextUsedTokens godoc for
-// semantics. Backends with authoritative context data (ACP) populate the
-// field directly; the no-override guard preserves their value.
-//
-// NOTE: intentionally in engine/cli (not engine/internal) — only CLI backends
-// need derived context fill today. Follows wrapExitError inlining precedent.
-func enrichContextUsed(u *agentrun.Usage) {
-	if u == nil || u.ContextUsedTokens != 0 {
-		return
-	}
-	total := max(0, u.InputTokens) +
-		max(0, u.OutputTokens) +
-		max(0, u.CacheReadTokens) +
-		max(0, u.CacheWriteTokens) +
-		max(0, u.ThinkingTokens)
-	if total <= 0 {
-		return
-	}
-	u.ContextUsedTokens = total
 }
 
 // applyStopReasonCarryForward implements StopReason carry-forward between

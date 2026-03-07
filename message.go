@@ -37,7 +37,8 @@ const (
 	// this type; it is currently produced by ACP's usage_update notification.
 	//
 	// CLI backends do not emit MessageContextWindow. Instead, the CLI engine
-	// populates ContextUsedTokens on MessageResult as a derived estimate.
+	// populates ContextUsedTokens on MessageResult as a derived estimate
+	// when per-call usage data is available (e.g., Claude CLI).
 	// See Usage.ContextUsedTokens for details on both sources.
 	//
 	// Only ContextSizeTokens and ContextUsedTokens are meaningful on this
@@ -244,19 +245,23 @@ type Usage struct {
 	ContextSizeTokens int `json:"context_size_tokens,omitempty"`
 
 	// ContextUsedTokens is the current context window fill level in tokens.
-	// Omitted when zero (0 means not reported by this backend).
+	// Omitted when zero (0 means not reported by this backend, per omitempty).
 	//
 	// Sources:
 	//   - MessageContextWindow: authoritative measurement from the agent
-	//     protocol (ACP usage_update).
-	//   - MessageResult: best available estimate derived by the CLI engine.
-	//     When per-call usage is available (assistant messages with token
-	//     data), uses the maximum of (InputTokens + CacheReadTokens +
-	//     CacheWriteTokens) across all API calls in the turn — representing
-	//     peak context fill. Falls back to summing all token fields from the
-	//     result event when per-call data is unavailable. Not set when all
-	//     token fields are zero or when the backend already provides an
-	//     authoritative value.
+	//     protocol (ACP usage_update). When ContextUsedTokens is 0 (fresh
+	//     session), the field is omitted in JSON per omitempty — consumers
+	//     can infer context is being reported (but empty) when
+	//     ContextSizeTokens > 0 on the same message.
+	//   - MessageResult (CLI engine): derived estimate using the maximum of
+	//     (InputTokens + CacheReadTokens + CacheWriteTokens) across all
+	//     per-call usage events in the turn — representing peak context fill.
+	//     Only set when the backend emits per-call usage on non-result
+	//     messages (e.g., Claude CLI assistant events). Backends that report
+	//     usage only on the result event (e.g., Codex, OpenCode) leave this
+	//     field unset (0) because the CLI engine lacks trustworthy per-call
+	//     data. Not set when the backend already provides an authoritative
+	//     value.
 	ContextUsedTokens int `json:"context_used_tokens,omitempty"`
 }
 

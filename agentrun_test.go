@@ -557,6 +557,28 @@ func TestUsage_JSON_WithAllFields(t *testing.T) {
 	}
 }
 
+func TestUsage_JSON_ContextWindowReportedButEmpty(t *testing.T) {
+	// ACP fresh-session scenario: ContextSizeTokens is set (window capacity
+	// known) but ContextUsedTokens is 0 (empty context). Per omitempty,
+	// context_used_tokens must be omitted while context_size_tokens is present.
+	// Consumers infer "reported but empty" via ContextSizeTokens > 0.
+	u := Usage{ContextSizeTokens: 200000, ContextUsedTokens: 0}
+	data, err := json.Marshal(u)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, ok := raw["context_size_tokens"]; !ok {
+		t.Error("context_size_tokens should be present when non-zero")
+	}
+	if _, ok := raw["context_used_tokens"]; ok {
+		t.Error("context_used_tokens should be omitted when zero (omitempty)")
+	}
+}
+
 func TestStopReasonConstants(t *testing.T) {
 	tests := []struct {
 		name string
