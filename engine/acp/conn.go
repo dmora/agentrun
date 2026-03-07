@@ -1,13 +1,15 @@
 package acp
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
 	"sync/atomic"
+
+	"github.com/dmora/agentrun/engine/internal/lineread"
 )
 
 // Conn is a bidirectional JSON-RPC 2.0 multiplexer over newline-delimited JSON.
@@ -30,7 +32,7 @@ type Conn struct {
 	methodHandlers map[string]func(json.RawMessage) (any, error)
 	onParseError   func(line []byte, err error)
 
-	scanner *bufio.Scanner
+	lr *lineread.Reader
 
 	done    chan struct{}
 	readErr atomic.Value // stores error (nil = no error)
@@ -47,10 +49,6 @@ type connConfig struct {
 // newConn creates a JSON-RPC 2.0 connection reading from r and writing to w.
 // Call ReadLoop in a goroutine to start processing inbound messages.
 func newConn(r io.Reader, w io.Writer, cfg connConfig) *Conn {
-	maxSize := cfg.maxMessageSize
-	if maxSize <= 0 {
-		maxSize = defaultMaxMessageSize
-	}
 	c := &Conn{
 		w:              w,
 		enc:            json.NewEncoder(w),
@@ -59,17 +57,14 @@ func newConn(r io.Reader, w io.Writer, cfg connConfig) *Conn {
 		methodHandlers: make(map[string]func(json.RawMessage) (any, error)),
 		onParseError:   cfg.onParseError,
 		done:           make(chan struct{}),
-		maxMessageSize: maxSize,
+		maxMessageSize: cfg.maxMessageSize,
 	}
-	c.scanner = newScanner(r, c.maxMessageSize)
+	initBuf := 4096
+	if cfg.maxMessageSize > 0 && cfg.maxMessageSize < initBuf {
+		initBuf = cfg.maxMessageSize
+	}
+	c.lr = lineread.NewReader(r, initBuf, cfg.maxMessageSize)
 	return c
-}
-
-func newScanner(r io.Reader, maxSize int) *bufio.Scanner {
-	s := bufio.NewScanner(r)
-	initCap := min(4096, maxSize)
-	s.Buffer(make([]byte, 0, initCap), maxSize)
-	return s
 }
 
 // OnNotification registers a handler for JSON-RPC notifications (no id field).
@@ -162,10 +157,16 @@ func (c *Conn) ReadLoop() {
 	defer close(c.done)
 	defer c.drainPending()
 
-	for c.scanner.Scan() {
-		line := c.scanner.Bytes()
+	for {
+		line, err := c.lr.ReadLine()
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				c.readErr.Store(err)
+			}
+			return
+		}
 		if len(line) == 0 || line[0] != '{' {
-			continue // skip blank lines and non-JSON (e.g. agent startup banners)
+			continue
 		}
 
 		var msg rpcMessage
@@ -175,12 +176,7 @@ func (c *Conn) ReadLoop() {
 			}
 			continue
 		}
-
 		c.dispatch(&msg)
-	}
-
-	if err := c.scanner.Err(); err != nil {
-		c.readErr.Store(err)
 	}
 }
 

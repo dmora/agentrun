@@ -128,6 +128,14 @@ func WithPermissionTimeout(d time.Duration) EngineOption {
 	}
 }
 
+// WithMaxMessageSize sets the maximum JSON-RPC message size in bytes.
+// The default is 4 MB. Zero or negative means unlimited.
+func WithMaxMessageSize(size int) EngineOption {
+	return func(o *EngineOptions) {
+		o.MaxMessageSize = size
+	}
+}
+
 func resolveEngineOptions(opts ...EngineOption) EngineOptions {
 	o := EngineOptions{
 		OutputBuffer:      defaultOutputBuffer,

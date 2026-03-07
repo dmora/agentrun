@@ -71,6 +71,7 @@ agentrun (interfaces)
 │   └── opencode/        ← OpenCode backend
 ├── engine/internal/     ← Shared helpers across all engine types (not importable by consumers)
 │   ├── errfmt/          ← Error formatting + ErrorCode sanitization (Truncate, SanitizeCode)
+│   ├── lineread/        ← Unbounded line reader (ReadSlice-based, accumulation-safe cap)
 │   └── stoputil/        ← StopReason sanitization (control char rejection, length truncation)
 ├── engine/acp/          ← ACP engine: JSON-RPC 2.0 persistent subprocess
 │   ├── conn.go          ← Bidirectional JSON-RPC 2.0 Conn (platform-agnostic)
@@ -96,6 +97,7 @@ agentrun (interfaces)
 | `engine/cli/codex` | Codex CLI backend (Spawner, Parser, Resumer — resume-per-turn) |
 | `engine/cli/opencode` | OpenCode backend (Spawner, Parser, Resumer) |
 | `engine/internal/errfmt` | Shared error formatting + ErrorCode sanitization for all engine parsers |
+| `engine/internal/lineread` | ReadSlice-based line reader with accumulation-safe max line size cap — used by CLI and ACP engines |
 | `engine/cli/internal/jsonutil` | Shared JSON extraction helpers (GetString, GetInt, GetMap, ContainsNull) |
 | `engine/cli/internal/optutil` | Shared option resolution + validation (RootOptionsSet, ValidateModeHITL) |
 | `engine/internal/stoputil` | Shared StopReason sanitization (control char rejection, rune-safe truncation) — used by CLI and ACP engines |

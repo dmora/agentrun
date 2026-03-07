@@ -175,6 +175,17 @@ func wireReadLoop(conn *Conn, p *process, hitl agentrun.HITL, opts EngineOptions
 		conn.ReadLoop()
 		close(updateCh)     // signal dispatch goroutine to finish
 		dispatchDone.Wait() // wait for all queued updates to be emitted
+
+		// If ReadLoop failed (e.g., line too long), kill the subprocess
+		// and surface the read error. Do NOT set stopping — this is not
+		// a user-initiated stop, and finish() would rewrite the error
+		// to ErrTerminated if stopping is true (process.go:242).
+		if readErr := conn.Err(); readErr != nil {
+			_ = signalProcess(p.cmd.Process, os.Kill)
+			_ = p.cmd.Wait() // reap zombie
+			p.finish(fmt.Errorf("acp: reader: %w", readErr))
+			return
+		}
 		p.finish(wrapExitError(p.waitCmd()))
 	}()
 }

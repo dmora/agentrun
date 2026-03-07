@@ -1476,7 +1476,7 @@ func TestReadLoop_PanicRecovery(t *testing.T) {
 	}
 }
 
-func TestReadLoop_ScannerOverflow(t *testing.T) {
+func TestReadLoop_LineTooLong(t *testing.T) {
 	b := withResumer(testBackend{
 		spawnFn: func(_ agentrun.Session) (string, []string) {
 			// Generate a line longer than 256 bytes (no trailing newline).
@@ -1484,8 +1484,8 @@ func TestReadLoop_ScannerOverflow(t *testing.T) {
 		},
 		parseFn: textParser,
 	})
-	// Set tiny scanner buffer to trigger overflow.
-	eng := cli.NewEngine(b, cli.WithScannerBuffer(256))
+	// Set tiny max line size to trigger overflow.
+	eng := cli.NewEngine(b, cli.WithMaxLineSize(256))
 	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t)})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -1494,13 +1494,43 @@ func TestReadLoop_ScannerOverflow(t *testing.T) {
 	msgs := drain(p)
 	hasError := false
 	for _, m := range msgs {
-		if m.Type == agentrun.MessageError && strings.Contains(m.Content, "scanner") {
+		if m.Type == agentrun.MessageError && strings.Contains(m.Content, "reader") {
 			hasError = true
 			break
 		}
 	}
 	if !hasError {
-		t.Fatalf("expected scanner error message, got %v", msgs)
+		t.Fatalf("expected reader error message, got %v", msgs)
+	}
+}
+
+func TestReadLoop_LargeLineSuccess(t *testing.T) {
+	// Regression test: a 2 MB JSON line must parse successfully with unlimited max line size.
+	const size = 2 << 20 // 2 MB
+	b := withResumer(testBackend{
+		spawnFn: func(_ agentrun.Session) (string, []string) {
+			// printf outputs a line of 'A's with a trailing newline.
+			return binBash, []string{"-c", fmt.Sprintf("printf '%%s\\n' $(head -c %d /dev/zero | tr '\\0' 'A')", size)}
+		},
+		parseFn: textParser,
+	})
+	// MaxLineSize=0 means unlimited — the large line should succeed.
+	eng := cli.NewEngine(b, cli.WithMaxLineSize(0))
+	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t)})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	msgs := drain(p)
+	hasText := false
+	for _, m := range msgs {
+		if m.Type == agentrun.MessageText && len(m.Content) >= size {
+			hasText = true
+			break
+		}
+	}
+	if !hasText {
+		t.Fatalf("expected a text message with >= %d bytes, got %d messages", size, len(msgs))
 	}
 }
 
@@ -1754,7 +1784,7 @@ func TestOptions_Defaults(t *testing.T) {
 func TestOptions_Custom(t *testing.T) {
 	eng := cli.NewEngine(echoResumerBackend(),
 		cli.WithOutputBuffer(10),
-		cli.WithScannerBuffer(4096),
+		cli.WithMaxLineSize(4096),
 		cli.WithGracePeriod(1*time.Second),
 	)
 	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t), Prompt: "x"})

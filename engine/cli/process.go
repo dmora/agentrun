@@ -3,7 +3,6 @@
 package cli
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -16,6 +15,7 @@ import (
 	"time"
 
 	"github.com/dmora/agentrun"
+	"github.com/dmora/agentrun/engine/internal/lineread"
 )
 
 // capabilities holds resolved optional interfaces for a process.
@@ -273,7 +273,7 @@ func (p *process) readLoop(ctx context.Context, stdout io.ReadCloser) {
 		case panicErr != nil:
 			waitErr = panicErr
 		case scanErr != nil:
-			waitErr = fmt.Errorf("cli: scanner: %w", scanErr)
+			waitErr = fmt.Errorf("cli: reader: %w", scanErr)
 		default:
 			waitErr = wrapExitError(waitErr)
 			if waitErr == nil && p.awaitingResult.Load() {
@@ -298,10 +298,10 @@ func (p *process) readLoop(ctx context.Context, stdout io.ReadCloser) {
 
 	scanErr = p.scanLines(ctx, stdout)
 	if scanErr != nil {
-		// Surface scanner error as a message before termination.
+		// Surface reader error as a message before termination.
 		msg := agentrun.Message{
 			Type:      agentrun.MessageError,
-			Content:   fmt.Sprintf("cli: scanner: %v", scanErr),
+			Content:   fmt.Sprintf("cli: reader: %v", scanErr),
 			Timestamp: time.Now(),
 		}
 		select {
@@ -315,46 +315,35 @@ func (p *process) readLoop(ctx context.Context, stdout io.ReadCloser) {
 	}
 }
 
+// defaultReadBuffer is the internal bufio.Reader chunk size for stdout reading.
+const defaultReadBuffer = 64 * 1024
+
 // scanLines reads lines from stdout and sends parsed messages to the output channel.
 func (p *process) scanLines(ctx context.Context, stdout io.ReadCloser) error {
-	scanner := bufio.NewScanner(stdout)
-	initCap := min(4096, p.opts.ScannerBuffer)
-	scanner.Buffer(make([]byte, 0, initCap), p.opts.ScannerBuffer)
+	lr := lineread.NewReader(stdout, defaultReadBuffer, p.opts.MaxLineSize)
 
 	var lastStopReason agentrun.StopReason
 	var maxCallFill int
 
-	for scanner.Scan() {
-		line := scanner.Text()
-		msg, err := p.backend.ParseLine(line)
-		if errors.Is(err, ErrSkipLine) {
+	for {
+		line, err := lr.ReadLineString()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+		msg, skip, backendError := p.parseLine(line)
+		if skip {
 			continue
 		}
-		if err != nil {
-			// Synthetic error — recoverable parse failure. Do NOT reset
-			// maxCallFill; the turn may still produce a result.
-			msg = agentrun.Message{
-				Type:    agentrun.MessageError,
-				Content: fmt.Sprintf("cli: parse: %v", err),
-			}
-		} else if msg.Type == agentrun.MessageError {
-			// Backend-emitted error — turn abort boundary. Reset the
-			// per-call fill accumulator so it doesn't leak into the
-			// next successful result.
+
+		// Only reset maxCallFill on backend-emitted errors (turn abort
+		// boundary), not synthetic parse errors (recoverable).
+		if backendError {
 			maxCallFill = 0
 		}
-		if msg.Timestamp.IsZero() {
-			msg.Timestamp = time.Now()
-		}
-
-		lastStopReason = applyStopReasonCarryForward(&msg, lastStopReason)
-		if msg.Type == agentrun.MessageInit {
-			msg.Process = p.processMetaSnapshot()
-		}
-		maxCallFill = applyContextFill(&msg, maxCallFill)
-		if msg.Type == agentrun.MessageResult {
-			p.awaitingResult.Store(false)
-		}
+		lastStopReason, maxCallFill = p.enrichMessage(&msg, lastStopReason, maxCallFill)
 
 		select {
 		case p.output <- msg:
@@ -362,7 +351,45 @@ func (p *process) scanLines(ctx context.Context, stdout io.ReadCloser) error {
 			return nil
 		}
 	}
-	return scanner.Err()
+}
+
+// enrichMessage applies engine-level enrichment to a parsed message:
+// error-boundary fill reset, stop-reason carry-forward, process metadata,
+// context fill tracking, and result acknowledgement.
+// Returns updated (lastStopReason, maxCallFill) for the next iteration.
+func (p *process) enrichMessage(msg *agentrun.Message, lastStopReason agentrun.StopReason, maxCallFill int) (agentrun.StopReason, int) {
+	lastStopReason = applyStopReasonCarryForward(msg, lastStopReason)
+	if msg.Type == agentrun.MessageInit {
+		msg.Process = p.processMetaSnapshot()
+	}
+	maxCallFill = applyContextFill(msg, maxCallFill)
+	if msg.Type == agentrun.MessageResult {
+		p.awaitingResult.Store(false)
+	}
+	return lastStopReason, maxCallFill
+}
+
+// parseLine delegates to the backend parser and wraps parse errors as
+// MessageError messages. Returns (msg, skip, backendError):
+//   - skip=true: line should be ignored (ErrSkipLine)
+//   - backendError=true: backend emitted MessageError (turn abort boundary,
+//     caller must reset maxCallFill). False for synthetic parse errors.
+func (p *process) parseLine(line string) (agentrun.Message, bool, bool) {
+	msg, err := p.backend.ParseLine(line)
+	if errors.Is(err, ErrSkipLine) {
+		return agentrun.Message{}, true, false
+	}
+	backendError := err == nil && msg.Type == agentrun.MessageError
+	if err != nil {
+		msg = agentrun.Message{
+			Type:    agentrun.MessageError,
+			Content: fmt.Sprintf("cli: parse: %v", err),
+		}
+	}
+	if msg.Timestamp.IsZero() {
+		msg.Timestamp = time.Now()
+	}
+	return msg, false, backendError
 }
 
 // wrapExitError converts a non-zero *exec.ExitError to *agentrun.ExitError.
