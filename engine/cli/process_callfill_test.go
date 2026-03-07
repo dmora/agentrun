@@ -21,22 +21,17 @@ func (b *callFillBackend) ParseLine(line string) (agentrun.Message, error) {
 	return b.parseFn(line)
 }
 
-// runScanLines creates a minimal process, feeds one line per message via a
-// pipe, and collects all emitted messages. The backend's parseFn returns
-// the canned messages in order; the pipe content is just a trigger.
-func runScanLines(t *testing.T, messages []agentrun.Message) []agentrun.Message {
+// runScanLinesWithParser creates a minimal process, feeds lineCount lines
+// via a pipe, and collects all emitted messages. The provided parseFn is
+// called for each line, allowing tests to simulate ParseLine errors.
+func runScanLinesWithParser(t *testing.T, lineCount int, parseFn func(string) (agentrun.Message, error)) []agentrun.Message {
 	t.Helper()
 
-	idx := 0
-	backend := &callFillBackend{parseFn: func(_ string) (agentrun.Message, error) {
-		m := messages[idx]
-		idx++
-		return m, nil
-	}}
+	backend := &callFillBackend{parseFn: parseFn}
 
 	r, w := io.Pipe()
 	go func() {
-		for range messages {
+		for range lineCount {
 			fmt.Fprintln(w, "x")
 		}
 		w.Close()
@@ -55,11 +50,23 @@ func runScanLines(t *testing.T, messages []agentrun.Message) []agentrun.Message 
 		t.Fatalf("scanLines error: %v", err)
 	}
 	close(p.output)
-	out := make([]agentrun.Message, 0, len(messages))
+	out := make([]agentrun.Message, 0, lineCount)
 	for m := range p.output {
 		out = append(out, m)
 	}
 	return out
+}
+
+// runScanLines is a convenience wrapper for tests where all lines parse
+// successfully. Each message is returned in order with a nil error.
+func runScanLines(t *testing.T, messages []agentrun.Message) []agentrun.Message {
+	t.Helper()
+	idx := 0
+	return runScanLinesWithParser(t, len(messages), func(_ string) (agentrun.Message, error) {
+		m := messages[idx]
+		idx++
+		return m, nil
+	})
 }
 
 func findResult(msgs []agentrun.Message) *agentrun.Message {
@@ -206,34 +213,11 @@ func TestApplyContextFill_SyntheticParseErrorPreservesMax(t *testing.T) {
 		{msg: agentrun.Message{Type: agentrun.MessageResult, Usage: &agentrun.Usage{InputTokens: 9000, OutputTokens: 500, CacheReadTokens: 2000}}},
 	}
 	idx := 0
-	backend := &callFillBackend{parseFn: func(_ string) (agentrun.Message, error) {
+	msgs := runScanLinesWithParser(t, len(specs), func(_ string) (agentrun.Message, error) {
 		s := specs[idx]
 		idx++
 		return s.msg, s.err
-	}}
-
-	r, w := io.Pipe()
-	go func() {
-		for range specs {
-			fmt.Fprintln(w, "x")
-		}
-		w.Close()
-	}()
-	p := &process{
-		backend: backend,
-		opts:    EngineOptions{ScannerBuffer: 64 * 1024},
-		output:  make(chan agentrun.Message, 64),
-	}
-	done := make(chan error, 1)
-	go func() { done <- p.scanLines(context.Background(), r) }()
-	if err := <-done; err != nil {
-		t.Fatalf("scanLines error: %v", err)
-	}
-	close(p.output)
-	msgs := make([]agentrun.Message, 0, len(specs))
-	for m := range p.output {
-		msgs = append(msgs, m)
-	}
+	})
 
 	result := findResult(msgs)
 	if result == nil {
