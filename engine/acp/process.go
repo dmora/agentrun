@@ -160,9 +160,14 @@ func (p *process) Send(ctx context.Context, message string) error {
 		return agentrun.ErrTerminated
 	case <-ctx.Done():
 		td.seal() // seal collector (mid-execution handlers discard)
-		// Tell agent to stop processing the abandoned prompt.
-		_ = p.conn.Notify(MethodSessionCancel,
-			map[string]string{"sessionId": p.sessionID})
+		// Best-effort cancel — fire in a goroutine so a stalled subprocess
+		// or conn.mu contention cannot block Send from returning and
+		// releasing turnMu. The goroutine is bounded: the subprocess will
+		// exit (or be killed via Stop), closing the pipe.
+		go func() {
+			_ = p.conn.Notify(MethodSessionCancel,
+				map[string]string{"sessionId": p.sessionID})
+		}()
 		return ctx.Err()
 	}
 }
