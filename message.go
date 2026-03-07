@@ -141,6 +141,28 @@ type Message struct {
 	// Nil on all other message types and for API-based engines.
 	Process *ProcessMeta `json:"process,omitempty"`
 
+	// Denials lists tool invocations that were denied during this turn.
+	// Set exclusively on MessageResult messages when one or more tool calls
+	// were blocked by permission controls (e.g., dontAsk mode, HITL rejection).
+	// Nil means no denials occurred or the backend does not report them.
+	//
+	// Only populated for intentional deny decisions (operator/policy rejections).
+	// Infrastructure errors (handler panics, protocol failures) are surfaced
+	// via MessageError, not as denials.
+	//
+	// Attribution guarantee: exact when the turn completes normally.
+	// After turn cancellation (Send returns ctx.Err), a stale permission
+	// request from the cancelled turn may in rare cases be attributed to
+	// the following turn — see PermissionHandler documentation for details.
+	//
+	// Sources:
+	//   - Claude CLI: parsed from "permission_denials" array in result events.
+	//     Attribution is always exact (agent reports per-turn summary).
+	//   - ACP: accumulated when PermissionHandler returns false or no handler.
+	//     Best-effort after cancellation (see above).
+	//   - Codex/OpenCode: not populated (no structured denial reporting).
+	Denials []PermissionDenial `json:"denials,omitempty"`
+
 	// Raw is the original unparsed JSON from the backend.
 	// Backends populate this for pass-through or debugging.
 	Raw json.RawMessage `json:"raw,omitempty"`
@@ -289,4 +311,15 @@ type ProcessMeta struct {
 	// Populated from exec.Cmd.Path (the result of exec.LookPath).
 	// Empty means not available.
 	Binary string `json:"binary,omitempty"`
+}
+
+// PermissionDenial records a tool invocation that was denied during a turn.
+type PermissionDenial struct {
+	// Tool is the denied tool name. Sanitized via errfmt.SanitizeCode
+	// (control chars rejected, 128-byte cap).
+	Tool string `json:"tool,omitempty"`
+
+	// Reason is a human-readable explanation of why the tool was denied.
+	// Sanitized via errfmt.Truncate (4096-byte cap).
+	Reason string `json:"reason,omitempty"`
 }

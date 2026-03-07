@@ -243,7 +243,7 @@ func TestMessageJSON_Minimal(t *testing.T) {
 		t.Error("type field should be present")
 	}
 	// Timestamp is always present (time.Time is not omitempty-compatible).
-	for _, key := range []string{"content", "tool", "usage", "stop_reason", "error_code", "resume_id", "init", "raw"} {
+	for _, key := range []string{"content", "tool", "usage", "stop_reason", "error_code", "resume_id", "init", "denials", "raw"} {
 		if _, ok := raw[key]; ok {
 			t.Errorf("field %q should be omitted on minimal message", key)
 		}
@@ -808,5 +808,90 @@ func TestProcessMeta_JSON_Omitempty(t *testing.T) {
 	}
 	if pm.PID != 0 || pm.Binary != "" {
 		t.Errorf("zero ProcessMeta fields should round-trip as zero: %+v", pm)
+	}
+}
+
+// --- PermissionDenial JSON tests ---
+
+func TestPermissionDenial_JSON_RoundTrip(t *testing.T) {
+	msg := Message{
+		Type: MessageResult,
+		Denials: []PermissionDenial{
+			{Tool: "Bash", Reason: "no permission handler"},
+			{Tool: "Write", Reason: "denied by handler"},
+		},
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got Message
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got.Denials) != 2 {
+		t.Fatalf("Denials len = %d, want 2", len(got.Denials))
+	}
+	if got.Denials[0].Tool != "Bash" || got.Denials[0].Reason != "no permission handler" {
+		t.Errorf("Denials[0] = %+v, want {Bash, no permission handler}", got.Denials[0])
+	}
+	if got.Denials[1].Tool != "Write" || got.Denials[1].Reason != "denied by handler" {
+		t.Errorf("Denials[1] = %+v, want {Write, denied by handler}", got.Denials[1])
+	}
+}
+
+func TestPermissionDenial_JSON_NilOmitted(t *testing.T) {
+	msg := Message{Type: MessageResult}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, ok := raw["denials"]; ok {
+		t.Error("denials field should be omitted when nil")
+	}
+}
+
+func TestPermissionDenial_JSON_EmptySliceOmitted(t *testing.T) {
+	msg := Message{Type: MessageResult, Denials: []PermissionDenial{}}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, ok := raw["denials"]; ok {
+		t.Error("denials field should be omitted when empty slice")
+	}
+}
+
+func TestPermissionDenial_JSON_PartialFields(t *testing.T) {
+	tests := []struct {
+		name  string
+		input PermissionDenial
+	}{
+		{"tool_only", PermissionDenial{Tool: "Read"}},
+		{"reason_only", PermissionDenial{Reason: "auto-denied"}},
+		{"both", PermissionDenial{Tool: "Bash", Reason: "blocked"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := json.Marshal(tt.input)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			var got PermissionDenial
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if got != tt.input {
+				t.Errorf("round-trip mismatch: got %+v, want %+v", got, tt.input)
+			}
+		})
 	}
 }

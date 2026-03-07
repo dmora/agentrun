@@ -46,7 +46,8 @@ func TestHandlePromptResult_WithUsageNoContextFields(t *testing.T) {
 			OutputTokens: 200,
 		},
 	}
-	if err := p.handlePromptResult(nil, result); err != nil {
+	td := &turnDenials{}
+	if err := p.handlePromptResult(nil, result, td); err != nil {
 		t.Fatalf("handlePromptResult: %v", err)
 	}
 	msg := receiveMessage(t, p)
@@ -66,7 +67,8 @@ func TestHandlePromptResult_WithUsageNoContextFields(t *testing.T) {
 func TestHandlePromptResult_NilUsage(t *testing.T) {
 	p := newTestProcess(t)
 	result := &promptResult{StopReason: "end_turn"}
-	if err := p.handlePromptResult(nil, result); err != nil {
+	td := &turnDenials{}
+	if err := p.handlePromptResult(nil, result, td); err != nil {
 		t.Fatalf("handlePromptResult: %v", err)
 	}
 	msg := receiveMessage(t, p)

@@ -1298,6 +1298,194 @@ func TestResumeArgs_AddDirs(t *testing.T) {
 	}
 }
 
+// --- PermissionDontAsk tests ---
+
+func TestMapPermission_DontAsk(t *testing.T) {
+	got, err := mapPermission(PermissionDontAsk)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "dontAsk" {
+		t.Errorf("got %q, want %q", got, "dontAsk")
+	}
+}
+
+func TestSpawnArgs_DontAsk(t *testing.T) {
+	b := New()
+	session := agentrun.Session{
+		Prompt:  testPrompt,
+		Options: map[string]string{OptionPermissionMode: string(PermissionDontAsk)},
+	}
+	_, args := b.SpawnArgs(session)
+	assertArgs(t, args, []string{"--permission-mode", "dontAsk"}, nil, testPrompt, false)
+}
+
+func TestStreamArgs_DontAsk(t *testing.T) {
+	b := New()
+	session := agentrun.Session{
+		Options: map[string]string{OptionPermissionMode: string(PermissionDontAsk)},
+	}
+	_, args := b.StreamArgs(session)
+	assertArgs(t, args, []string{"--permission-mode", "dontAsk"}, nil, "", false)
+}
+
+func TestResumeArgs_DontAsk(t *testing.T) {
+	b := New()
+	session := agentrun.Session{
+		Options: map[string]string{
+			agentrun.OptionResumeID: testResumeID,
+			OptionPermissionMode:    string(PermissionDontAsk),
+		},
+	}
+	_, args, err := b.ResumeArgs(session, testPrompt)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertArgs(t, args, []string{"--permission-mode", "dontAsk"}, nil, testPrompt, false)
+}
+
+// --- AllowedTools option tests ---
+
+func TestSpawnArgs_AllowedTools(t *testing.T) {
+	tests := []struct {
+		name     string
+		tools    string
+		contains []string
+		excludes []string
+	}{
+		{"single", "Read", []string{"--allowedTools", "Read"}, nil},
+		{"multiple", "Read\nGrep\nGlob", []string{"--allowedTools", "Read", "--allowedTools", "Grep", "--allowedTools", "Glob"}, nil},
+		{"skip_leading_dash", "-malicious", nil, []string{"--allowedTools"}},
+		{"empty", "", nil, []string{"--allowedTools"}},
+		{"mixed", "Read\n-bad\nWrite", []string{"--allowedTools", "Read", "--allowedTools", "Write"}, nil},
+	}
+
+	b := New()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			session := agentrun.Session{
+				Prompt:  testPrompt,
+				Options: map[string]string{OptionAllowedTools: tt.tools},
+			}
+			_, args := b.SpawnArgs(session)
+			assertArgs(t, args, tt.contains, tt.excludes, testPrompt, false)
+		})
+	}
+}
+
+func TestStreamArgs_AllowedTools(t *testing.T) {
+	b := New()
+	session := agentrun.Session{
+		Options: map[string]string{OptionAllowedTools: "Read\nGrep"},
+	}
+	_, args := b.StreamArgs(session)
+	assertArgs(t, args, []string{"--allowedTools", "Read", "--allowedTools", "Grep"}, nil, "", false)
+}
+
+func TestResumeArgs_AllowedTools(t *testing.T) {
+	b := New()
+	session := agentrun.Session{
+		Options: map[string]string{
+			agentrun.OptionResumeID: testResumeID,
+			OptionAllowedTools:      "Bash\nEdit",
+		},
+	}
+	_, args, err := b.ResumeArgs(session, testPrompt)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertArgs(t, args, []string{"--allowedTools", "Bash", "--allowedTools", "Edit"}, nil, testPrompt, false)
+}
+
+// --- AllowedTools + PermissionMode precedence matrix (D5) ---
+
+func TestSpawnArgs_AllowedToolsPrecedence(t *testing.T) {
+	tests := []struct {
+		name     string
+		options  map[string]string
+		contains []string
+		excludes []string
+	}{
+		{
+			name: "dontAsk+tools",
+			options: map[string]string{
+				OptionPermissionMode: string(PermissionDontAsk),
+				OptionAllowedTools:   "Read",
+			},
+			contains: []string{"--permission-mode", "dontAsk", "--allowedTools", "Read"},
+		},
+		{
+			name: "default+tools",
+			options: map[string]string{
+				OptionPermissionMode: string(PermissionDefault),
+				OptionAllowedTools:   "Read",
+			},
+			contains: []string{"--allowedTools", "Read"},
+			excludes: []string{"--permission-mode"},
+		},
+		{
+			name: "acceptEdits+tools",
+			options: map[string]string{
+				OptionPermissionMode: string(PermissionAcceptEdits),
+				OptionAllowedTools:   "Read",
+			},
+			contains: []string{"--permission-mode", "acceptEdits", "--allowedTools", "Read"},
+		},
+		{
+			name: "bypassAll+tools",
+			options: map[string]string{
+				OptionPermissionMode: string(PermissionBypassAll),
+				OptionAllowedTools:   "Read",
+			},
+			contains: []string{"--permission-mode", "bypassPermissions", "--allowedTools", "Read"},
+		},
+		{
+			name: "modePlan_overrides+tools",
+			options: map[string]string{
+				agentrun.OptionMode: string(agentrun.ModePlan),
+				OptionAllowedTools:  "Read",
+			},
+			contains: []string{"--permission-mode", "plan", "--allowedTools", "Read"},
+		},
+		{
+			name: "hitlOff_overrides+tools",
+			options: map[string]string{
+				agentrun.OptionHITL: string(agentrun.HITLOff),
+				OptionAllowedTools:  "Read",
+			},
+			contains: []string{"--permission-mode", "bypassPermissions", "--allowedTools", "Read"},
+		},
+		{
+			name: "modeAct_hitlOn+tools",
+			options: map[string]string{
+				agentrun.OptionMode: string(agentrun.ModeAct),
+				agentrun.OptionHITL: string(agentrun.HITLOn),
+				OptionAllowedTools:  "Read",
+			},
+			contains: []string{"--allowedTools", "Read"},
+			excludes: []string{"--permission-mode"},
+		},
+		{
+			name:     "tools_absent",
+			options:  map[string]string{OptionPermissionMode: string(PermissionDontAsk)},
+			contains: []string{"--permission-mode", "dontAsk"},
+			excludes: []string{"--allowedTools"},
+		},
+	}
+
+	b := New()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			session := agentrun.Session{
+				Prompt:  testPrompt,
+				Options: tt.options,
+			}
+			_, args := b.SpawnArgs(session)
+			assertArgs(t, args, tt.contains, tt.excludes, testPrompt, false)
+		})
+	}
+}
+
 // --- Helpers ---
 
 func assertArgs(t *testing.T, args, contains, excludes []string, last string, noNullByte bool) {

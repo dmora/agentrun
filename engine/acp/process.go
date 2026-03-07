@@ -21,6 +21,9 @@ import (
 	"github.com/dmora/agentrun/engine/internal/stoputil"
 )
 
+// permHandlerFunc is the signature for the swappable permission handler.
+type permHandlerFunc = func(json.RawMessage) (any, error)
+
 // process implements agentrun.Process for ACP subprocess sessions.
 type process struct {
 	conn *Conn
@@ -45,6 +48,11 @@ type process struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
+
+	// Permission denial tracking — three-layer isolation.
+	hitl        agentrun.HITL                   // session-scoped, set in wireReadLoop
+	permHandler atomic.Pointer[permHandlerFunc] // delegated permission handler
+	rpcDone     chan struct{}                   // closed when current turn's conn.Call goroutine exits
 }
 
 var _ agentrun.Process = (*process)(nil)
@@ -90,6 +98,31 @@ func (p *process) Send(ctx context.Context, message string) error {
 		return agentrun.ErrTerminated
 	}
 
+	// --- Fence: wait for previous turn's RPC goroutine to exit ---
+	// Conn.Call returns immediately on ctx cancel (conn.go:110-112),
+	// so this wait is fast. Ensures clean RPC state before new turn.
+	if p.rpcDone != nil {
+		select {
+		case <-p.rpcDone:
+		case <-p.done:
+			return agentrun.ErrTerminated
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	// --- Create per-turn denial collector and handler ---
+	td := &turnDenials{}
+	handler := p.makeTurnPermHandler(td)
+	p.permHandler.Store(&handler)
+
+	// Deactivate turn handler on ALL exit paths — late permission requests
+	// from this turn must hit deny-all, not the next turn's handler.
+	defer func() {
+		denyAll := denyAllPermHandler
+		p.permHandler.Store(&denyAll)
+	}()
+
 	// Send session/prompt request.
 	params := promptParams{
 		SessionID: p.sessionID,
@@ -97,8 +130,11 @@ func (p *process) Send(ctx context.Context, message string) error {
 	}
 
 	var result promptResult
+	rpcDone := make(chan struct{})
+	p.rpcDone = rpcDone
 	errCh := make(chan error, 1)
 	go func() {
+		defer close(rpcDone)
 		errCh <- p.conn.Call(ctx, MethodSessionPrompt, params, &result)
 	}()
 
@@ -106,8 +142,10 @@ func (p *process) Send(ctx context.Context, message string) error {
 	// are ready simultaneously, to avoid discarding a successful result.
 	select {
 	case err := <-errCh:
-		return p.handlePromptResult(err, &result)
+		p.rpcDone = nil // normal completion — no fencing needed next time
+		return p.handlePromptResult(err, &result, td)
 	case <-p.done:
+		td.seal() // discard
 		// Drain errCh first — the RPC may have completed.
 		// Cannot call handlePromptResult here because finish() has
 		// already closed the output channel — emit() would panic.
@@ -121,18 +159,29 @@ func (p *process) Send(ctx context.Context, message string) error {
 		}
 		return agentrun.ErrTerminated
 	case <-ctx.Done():
+		td.seal() // seal collector (mid-execution handlers discard)
+		// Best-effort cancel — fire in a goroutine so a stalled subprocess
+		// or conn.mu contention cannot block Send from returning and
+		// releasing turnMu. The goroutine is bounded: the subprocess will
+		// exit (or be killed via Stop), closing the pipe.
+		go func() {
+			_ = p.conn.Notify(MethodSessionCancel,
+				map[string]string{"sessionId": p.sessionID})
+		}()
 		return ctx.Err()
 	}
 }
 
 // handlePromptResult processes a completed prompt RPC, emitting MessageResult on success.
-func (p *process) handlePromptResult(err error, result *promptResult) error {
+func (p *process) handlePromptResult(err error, result *promptResult, td *turnDenials) error {
 	if err != nil {
+		td.seal() // discard denials on error
 		return fmt.Errorf("acp: prompt: %w", err)
 	}
 	msg := agentrun.Message{
 		Type:       agentrun.MessageResult,
 		StopReason: stoputil.Sanitize(result.StopReason),
+		Denials:    td.seal(),
 		Timestamp:  time.Now(),
 	}
 	// Turn-level token usage only — context window fields (ContextSizeTokens,
@@ -538,10 +587,44 @@ func (p *process) applySessionConfig(ctx context.Context, session agentrun.Sessi
 
 // --- Permission handling ---
 
-// makePermissionHandler builds the OnMethod handler for session/request_permission.
-// The actual handler runs in a dedicated goroutine (dispatched by Conn.handleMethodCall).
-// It maps between the ACP option-based wire format and the public bool-based PermissionHandler.
-func (p *process) makePermissionHandler(hitl agentrun.HITL, opts EngineOptions) func(json.RawMessage) (any, error) {
+// turnDenials collects permission denials for a single turn.
+// Thread-safe: add() and seal() may be called from multiple goroutines.
+// Once sealed, add() is a no-op. seal() returns accumulated denials and
+// prevents further additions.
+type turnDenials struct {
+	mu     sync.Mutex
+	items  []agentrun.PermissionDenial
+	sealed bool
+}
+
+func (td *turnDenials) add(tool, reason string) {
+	td.mu.Lock()
+	defer td.mu.Unlock()
+	if td.sealed {
+		return
+	}
+	td.items = append(td.items, agentrun.PermissionDenial{
+		Tool:   errfmt.SanitizeCode(tool),
+		Reason: errfmt.Truncate(reason),
+	})
+}
+
+func (td *turnDenials) seal() []agentrun.PermissionDenial {
+	td.mu.Lock()
+	defer td.mu.Unlock()
+	td.sealed = true
+	d := td.items
+	td.items = nil
+	if len(d) == 0 {
+		return nil
+	}
+	return d
+}
+
+// makeTurnPermHandler creates a permission handler that records denials
+// to the given collector. Same logic as the former makePermissionHandler
+// but writes to td instead of process-level state.
+func (p *process) makeTurnPermHandler(td *turnDenials) permHandlerFunc {
 	return func(params json.RawMessage) (any, error) {
 		var wireReq requestPermissionParams
 		if err := json.Unmarshal(params, &wireReq); err != nil {
@@ -550,21 +633,22 @@ func (p *process) makePermissionHandler(hitl agentrun.HITL, opts EngineOptions) 
 				Content:   fmt.Sprintf("acp: unmarshal permission request: %v", err),
 				Timestamp: time.Now(),
 			})
-			return cancelledPermission(), nil
+			return cancelledPermission(), nil // D7: infra error, not a denial
 		}
 
 		// HITL off → auto-approve.
-		if hitl == agentrun.HITLOff {
+		if p.hitl == agentrun.HITLOff {
 			return selectPermissionOption(wireReq.Options, "allow_once", "allow_always"), nil
 		}
 
-		// No handler → auto-deny.
-		if opts.PermissionHandler == nil {
+		// No handler → auto-deny (policy decision → record denial).
+		if p.opts.PermissionHandler == nil {
+			td.add(wireReq.ToolCall.Title, "no permission handler")
 			return selectPermissionOption(wireReq.Options, "reject_once", "reject_always"), nil
 		}
 
 		// Call handler with timeout + panic recovery.
-		ctx, cancel := context.WithTimeout(p.ctx, opts.PermissionTimeout)
+		ctx, cancel := context.WithTimeout(p.ctx, p.opts.PermissionTimeout)
 		defer cancel()
 
 		pubReq := PermissionRequest{
@@ -573,21 +657,28 @@ func (p *process) makePermissionHandler(hitl agentrun.HITL, opts EngineOptions) 
 			ToolCallID:  wireReq.ToolCall.ToolCallID,
 			Description: wireReq.ToolCall.Kind,
 		}
-		approved, err := safeCallPermissionHandler(ctx, opts.PermissionHandler, pubReq)
+		approved, err := safeCallPermissionHandler(ctx, p.opts.PermissionHandler, pubReq)
 		if err != nil {
 			p.emit(agentrun.Message{
 				Type:      agentrun.MessageError,
 				Content:   fmt.Sprintf("acp: permission handler error: %v", err),
 				Timestamp: time.Now(),
 			})
-			return cancelledPermission(), nil
+			return cancelledPermission(), nil // D7: infra error, not a denial
 		}
 
 		if approved {
 			return selectPermissionOption(wireReq.Options, "allow_once", "allow_always"), nil
 		}
+		td.add(wireReq.ToolCall.Title, "denied by handler")
 		return selectPermissionOption(wireReq.Options, "reject_once", "reject_always"), nil
 	}
+}
+
+// denyAllPermHandler cancels all permission requests without recording denials.
+// Installed between turns to prevent stale requests from contaminating the next turn.
+func denyAllPermHandler(_ json.RawMessage) (any, error) {
+	return cancelledPermission(), nil
 }
 
 // firstOptionByKind finds the first option matching any of the given kinds.
