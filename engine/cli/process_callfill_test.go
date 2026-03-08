@@ -163,7 +163,9 @@ func TestApplyContextFill_TwoTurnsReset(t *testing.T) {
 }
 
 func TestApplyContextFill_NoPerCallUsage(t *testing.T) {
-	// No assistant messages with Usage → falls back to enrichContextUsed sum.
+	// No per-call assistant messages with Usage → ContextUsedTokens stays 0
+	// ("not reported" per omitempty semantics). The CLI engine does not
+	// fabricate a value from result-level totals.
 	msgs := runScanLines(t, []agentrun.Message{
 		{Type: agentrun.MessageResult, Usage: &agentrun.Usage{InputTokens: 5000, OutputTokens: 1000, CacheReadTokens: 500}},
 	})
@@ -171,9 +173,8 @@ func TestApplyContextFill_NoPerCallUsage(t *testing.T) {
 	if result == nil {
 		t.Fatal("no MessageResult found")
 	}
-	// enrichContextUsed sums all fields: 5000+1000+500 = 6500
-	if result.Usage.ContextUsedTokens != 6500 {
-		t.Errorf("ContextUsedTokens = %d, want 6500 (enrichContextUsed fallback)", result.Usage.ContextUsedTokens)
+	if result.Usage.ContextUsedTokens != 0 {
+		t.Errorf("ContextUsedTokens = %d, want 0 (not reported without per-call data)", result.Usage.ContextUsedTokens)
 	}
 }
 
