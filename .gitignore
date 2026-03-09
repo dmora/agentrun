@@ -36,3 +36,10 @@ CLAUDE.local.md
 
 # Planning artifacts
 plan-*.html
+
+# Built binaries in cmd/
+cmd/*/agentrun-*
+!cmd/*/agentrun-*.go
+
+# Generated docs
+cmd/*/docs/
