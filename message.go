@@ -37,8 +37,9 @@ const (
 	// this type; it is currently produced by ACP's usage_update notification.
 	//
 	// CLI backends do not emit MessageContextWindow. Instead, the CLI engine
-	// populates ContextUsedTokens on MessageResult as a derived estimate
-	// when per-call usage data is available (e.g., Claude CLI).
+	// populates ContextUsedTokens on both mid-turn messages (per-call fill)
+	// and MessageResult (peak fill across all calls in the turn) as derived
+	// estimates when per-call usage data is available (e.g., Claude CLI).
 	// See Usage.ContextUsedTokens for details on both sources.
 	//
 	// Only ContextSizeTokens and ContextUsedTokens are meaningful on this
@@ -262,6 +263,12 @@ type Usage struct {
 	//     field unset (0) because the CLI engine lacks trustworthy per-call
 	//     data. Not set when the backend already provides an authoritative
 	//     value.
+	//   - Mid-turn CLI messages (e.g., MessageText, MessageThinking): per-call
+	//     context fill for that specific API call (InputTokens + CacheReadTokens
+	//     + CacheWriteTokens). Unlike MessageResult which carries the peak across
+	//     all calls in the turn, mid-turn messages reflect the instantaneous fill
+	//     of a single call. Only set when the backend hasn't already provided an
+	//     authoritative value.
 	ContextUsedTokens int `json:"context_used_tokens,omitempty"`
 }
 
