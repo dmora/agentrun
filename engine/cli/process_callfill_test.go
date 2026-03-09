@@ -99,9 +99,18 @@ func TestApplyContextFill_MultiCallTurn(t *testing.T) {
 	if result == nil {
 		t.Fatal("no MessageResult found")
 	}
-	// max fill: call 2 → 7000+4000+100 = 11100
-	if result.Usage.ContextUsedTokens != 11100 {
-		t.Errorf("ContextUsedTokens = %d, want 11100", result.Usage.ContextUsedTokens)
+	// Mid-turn messages carry per-call fill.
+	wantCall0 := 5000 + 3000 + 200
+	if msgs[0].Usage.ContextUsedTokens != wantCall0 {
+		t.Errorf("msg[0] ContextUsedTokens = %d, want %d", msgs[0].Usage.ContextUsedTokens, wantCall0)
+	}
+	wantCall1 := 7000 + 4000 + 100
+	if msgs[1].Usage.ContextUsedTokens != wantCall1 {
+		t.Errorf("msg[1] ContextUsedTokens = %d, want %d", msgs[1].Usage.ContextUsedTokens, wantCall1)
+	}
+	// Result: peak across calls = call 2's fill.
+	if result.Usage.ContextUsedTokens != wantCall1 {
+		t.Errorf("result ContextUsedTokens = %d, want %d", result.Usage.ContextUsedTokens, wantCall1)
 	}
 }
 
@@ -115,8 +124,9 @@ func TestApplyContextFill_SingleCallTurn(t *testing.T) {
 	if result == nil {
 		t.Fatal("no MessageResult found")
 	}
-	if result.Usage.ContextUsedTokens != 8000 {
-		t.Errorf("ContextUsedTokens = %d, want 8000", result.Usage.ContextUsedTokens)
+	want := 5000 + 3000
+	if result.Usage.ContextUsedTokens != want {
+		t.Errorf("ContextUsedTokens = %d, want %d", result.Usage.ContextUsedTokens, want)
 	}
 }
 
@@ -130,9 +140,9 @@ func TestApplyContextFill_ThinkingMessage(t *testing.T) {
 	if result == nil {
 		t.Fatal("no MessageResult found")
 	}
-	// fill: 9000+2000+500 = 11500
-	if result.Usage.ContextUsedTokens != 11500 {
-		t.Errorf("ContextUsedTokens = %d, want 11500", result.Usage.ContextUsedTokens)
+	want := 9000 + 2000 + 500
+	if result.Usage.ContextUsedTokens != want {
+		t.Errorf("ContextUsedTokens = %d, want %d", result.Usage.ContextUsedTokens, want)
 	}
 }
 
@@ -152,13 +162,21 @@ func TestApplyContextFill_TwoTurnsReset(t *testing.T) {
 	if len(results) != 2 {
 		t.Fatalf("got %d results, want 2", len(results))
 	}
-	// Turn 1: fill = 7000+4000 = 11000
-	if results[0].Usage.ContextUsedTokens != 11000 {
-		t.Errorf("turn 1 ContextUsedTokens = %d, want 11000", results[0].Usage.ContextUsedTokens)
+	// Turn 1 mid-turn: per-call fill = 7000+4000 = 11000
+	wantTurn1 := 7000 + 4000
+	if msgs[0].Usage.ContextUsedTokens != wantTurn1 {
+		t.Errorf("turn 1 mid-turn ContextUsedTokens = %d, want %d", msgs[0].Usage.ContextUsedTokens, wantTurn1)
 	}
-	// Turn 2: fill = 8000+1000 = 9000 (not stale 11000)
-	if results[1].Usage.ContextUsedTokens != 9000 {
-		t.Errorf("turn 2 ContextUsedTokens = %d, want 9000", results[1].Usage.ContextUsedTokens)
+	if results[0].Usage.ContextUsedTokens != wantTurn1 {
+		t.Errorf("turn 1 result ContextUsedTokens = %d, want %d", results[0].Usage.ContextUsedTokens, wantTurn1)
+	}
+	// Turn 2 mid-turn: per-call fill = 8000+1000 = 9000 (not stale 11000)
+	wantTurn2 := 8000 + 1000
+	if msgs[2].Usage.ContextUsedTokens != wantTurn2 {
+		t.Errorf("turn 2 mid-turn ContextUsedTokens = %d, want %d", msgs[2].Usage.ContextUsedTokens, wantTurn2)
+	}
+	if results[1].Usage.ContextUsedTokens != wantTurn2 {
+		t.Errorf("turn 2 result ContextUsedTokens = %d, want %d", results[1].Usage.ContextUsedTokens, wantTurn2)
 	}
 }
 
@@ -194,9 +212,15 @@ func TestApplyContextFill_ErrorResetsAccumulator(t *testing.T) {
 	if result == nil {
 		t.Fatal("no MessageResult found")
 	}
-	// fill: 3000+1000 = 4000 (not stale 15000 from turn 1)
-	if result.Usage.ContextUsedTokens != 4000 {
-		t.Errorf("ContextUsedTokens = %d, want 4000 (stale leak from aborted turn)", result.Usage.ContextUsedTokens)
+	// Aborted turn's mid-turn message still gets per-call fill.
+	wantAborted := 10000 + 5000
+	if msgs[0].Usage.ContextUsedTokens != wantAborted {
+		t.Errorf("aborted turn msg[0] ContextUsedTokens = %d, want %d", msgs[0].Usage.ContextUsedTokens, wantAborted)
+	}
+	// Turn 2 result uses turn 2's fill, not stale turn 1 value.
+	wantTurn2 := 3000 + 1000
+	if result.Usage.ContextUsedTokens != wantTurn2 {
+		t.Errorf("ContextUsedTokens = %d, want %d (stale leak from aborted turn)", result.Usage.ContextUsedTokens, wantTurn2)
 	}
 }
 
@@ -224,24 +248,134 @@ func TestApplyContextFill_SyntheticParseErrorPreservesMax(t *testing.T) {
 	if result == nil {
 		t.Fatal("no MessageResult found")
 	}
-	// Per-call max from the first MessageText (9000+2000 = 11000) must survive
-	// through the synthetic parse error and apply to the result.
-	if result.Usage.ContextUsedTokens != 11000 {
-		t.Errorf("ContextUsedTokens = %d, want 11000 (synthetic error must not reset)", result.Usage.ContextUsedTokens)
+	// Per-call max from the first MessageText must survive through the
+	// synthetic parse error and apply to the result.
+	want := 9000 + 2000
+	if result.Usage.ContextUsedTokens != want {
+		t.Errorf("ContextUsedTokens = %d, want %d (synthetic error must not reset)", result.Usage.ContextUsedTokens, want)
 	}
 }
 
 func TestApplyContextFill_BackendProvided(t *testing.T) {
 	// Result already has ContextUsedTokens → no override.
+	const backendProvided = 99999
 	msgs := runScanLines(t, []agentrun.Message{
 		{Type: agentrun.MessageText, Usage: &agentrun.Usage{InputTokens: 5000, CacheReadTokens: 3000}},
-		{Type: agentrun.MessageResult, Usage: &agentrun.Usage{InputTokens: 5000, OutputTokens: 1000, ContextUsedTokens: 99999}},
+		{Type: agentrun.MessageResult, Usage: &agentrun.Usage{InputTokens: 5000, OutputTokens: 1000, ContextUsedTokens: backendProvided}},
 	})
 	result := findResult(msgs)
 	if result == nil {
 		t.Fatal("no MessageResult found")
 	}
-	if result.Usage.ContextUsedTokens != 99999 {
-		t.Errorf("ContextUsedTokens = %d, want 99999 (backend-provided, no override)", result.Usage.ContextUsedTokens)
+	if result.Usage.ContextUsedTokens != backendProvided {
+		t.Errorf("ContextUsedTokens = %d, want %d (backend-provided, no override)", result.Usage.ContextUsedTokens, backendProvided)
+	}
+}
+
+func TestApplyContextFill_MidTurnDelta(t *testing.T) {
+	// Delta messages don't carry Usage in practice (parsers don't set it),
+	// but if one did, applyContextFill treats it like any non-result message.
+	msgs := runScanLines(t, []agentrun.Message{
+		{Type: agentrun.MessageTextDelta, Usage: &agentrun.Usage{InputTokens: 4000, CacheReadTokens: 2000, CacheWriteTokens: 100}},
+		{Type: agentrun.MessageResult, Usage: &agentrun.Usage{InputTokens: 4000, OutputTokens: 500}},
+	})
+	want := 4000 + 2000 + 100
+	if msgs[0].Usage.ContextUsedTokens != want {
+		t.Errorf("delta ContextUsedTokens = %d, want %d", msgs[0].Usage.ContextUsedTokens, want)
+	}
+	result := findResult(msgs)
+	if result == nil {
+		t.Fatal("no MessageResult found")
+	}
+	if result.Usage.ContextUsedTokens != want {
+		t.Errorf("result ContextUsedTokens = %d, want %d", result.Usage.ContextUsedTokens, want)
+	}
+}
+
+func TestApplyContextFill_MidTurnMessages(t *testing.T) {
+	// Two mid-turn messages with different usage. First has higher fill than
+	// second, proving mid-turn gets per-call fill (not running peak).
+	msgs := runScanLines(t, []agentrun.Message{
+		{Type: agentrun.MessageText, Usage: &agentrun.Usage{InputTokens: 7000, CacheReadTokens: 4000, CacheWriteTokens: 100}},
+		{Type: agentrun.MessageText, Usage: &agentrun.Usage{InputTokens: 5000, CacheReadTokens: 3000, CacheWriteTokens: 200}},
+		{Type: agentrun.MessageResult, Usage: &agentrun.Usage{InputTokens: 12000, OutputTokens: 2000}},
+	})
+	wantMsg0 := 7000 + 4000 + 100
+	if msgs[0].Usage.ContextUsedTokens != wantMsg0 {
+		t.Errorf("msg[0] ContextUsedTokens = %d, want %d", msgs[0].Usage.ContextUsedTokens, wantMsg0)
+	}
+	// msg[1] gets its own per-call fill, NOT the peak-so-far from msg[0].
+	wantMsg1 := 5000 + 3000 + 200
+	if msgs[1].Usage.ContextUsedTokens != wantMsg1 {
+		t.Errorf("msg[1] ContextUsedTokens = %d, want %d (per-call, not peak)", msgs[1].Usage.ContextUsedTokens, wantMsg1)
+	}
+	// Result: peak across both calls.
+	result := findResult(msgs)
+	if result == nil {
+		t.Fatal("no MessageResult found")
+	}
+	if result.Usage.ContextUsedTokens != wantMsg0 {
+		t.Errorf("result ContextUsedTokens = %d, want %d (peak)", result.Usage.ContextUsedTokens, wantMsg0)
+	}
+}
+
+func TestApplyContextFill_MidTurnBackendProvided(t *testing.T) {
+	// Mid-turn message already has ContextUsedTokens → no override.
+	const backendProvided = 99999
+	msgs := runScanLines(t, []agentrun.Message{
+		{Type: agentrun.MessageText, Usage: &agentrun.Usage{InputTokens: 5000, CacheReadTokens: 3000, ContextUsedTokens: backendProvided}},
+		{Type: agentrun.MessageResult, Usage: &agentrun.Usage{InputTokens: 5000, OutputTokens: 1000}},
+	})
+	// Mid-turn: backend-provided value preserved.
+	if msgs[0].Usage.ContextUsedTokens != backendProvided {
+		t.Errorf("mid-turn ContextUsedTokens = %d, want %d (backend-provided)", msgs[0].Usage.ContextUsedTokens, backendProvided)
+	}
+	// Result: computed fill, not the backend-provided mid-turn value.
+	result := findResult(msgs)
+	if result == nil {
+		t.Fatal("no MessageResult found")
+	}
+	wantResult := 5000 + 3000
+	if result.Usage.ContextUsedTokens != wantResult {
+		t.Errorf("result ContextUsedTokens = %d, want %d (computed fill)", result.Usage.ContextUsedTokens, wantResult)
+	}
+}
+
+func TestApplyContextFill_MidTurnThinking(t *testing.T) {
+	// MessageThinking with usage gets per-call fill, same as MessageText.
+	msgs := runScanLines(t, []agentrun.Message{
+		{Type: agentrun.MessageThinking, Usage: &agentrun.Usage{InputTokens: 9000, CacheReadTokens: 2000, CacheWriteTokens: 500}},
+		{Type: agentrun.MessageResult, Usage: &agentrun.Usage{InputTokens: 9000, OutputTokens: 500}},
+	})
+	want := 9000 + 2000 + 500
+	if msgs[0].Usage.ContextUsedTokens != want {
+		t.Errorf("thinking ContextUsedTokens = %d, want %d", msgs[0].Usage.ContextUsedTokens, want)
+	}
+	result := findResult(msgs)
+	if result == nil {
+		t.Fatal("no MessageResult found")
+	}
+	if result.Usage.ContextUsedTokens != want {
+		t.Errorf("result ContextUsedTokens = %d, want %d", result.Usage.ContextUsedTokens, want)
+	}
+}
+
+func TestApplyContextFill_MidTurnZeroFill(t *testing.T) {
+	// Mid-turn message with Usage where all input-side fields are zero.
+	// Computed fill is 0, so ContextUsedTokens stays 0 (== 0 guard is a no-op
+	// because the value being written is also 0). Result also stays 0.
+	msgs := runScanLines(t, []agentrun.Message{
+		{Type: agentrun.MessageText, Usage: &agentrun.Usage{OutputTokens: 500}},
+		{Type: agentrun.MessageResult, Usage: &agentrun.Usage{OutputTokens: 500}},
+	})
+	if msgs[0].Usage.ContextUsedTokens != 0 {
+		t.Errorf("mid-turn ContextUsedTokens = %d, want 0 (zero fill)", msgs[0].Usage.ContextUsedTokens)
+	}
+	result := findResult(msgs)
+	if result == nil {
+		t.Fatal("no MessageResult found")
+	}
+	if result.Usage.ContextUsedTokens != 0 {
+		t.Errorf("result ContextUsedTokens = %d, want 0 (zero fill)", result.Usage.ContextUsedTokens)
 	}
 }

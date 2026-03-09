@@ -441,10 +441,15 @@ func callContextFill(u *agentrun.Usage) int {
 	return max(0, u.InputTokens) + max(0, u.CacheReadTokens) + max(0, u.CacheWriteTokens)
 }
 
-// applyContextFill tracks per-call context fill and enriches MessageResult.
+// applyContextFill tracks per-call context fill and enriches mid-turn messages
+// and MessageResult.
 //
-// For non-result messages with Usage, it updates maxCallFill with the peak
-// input-side fill across all API calls in the turn. For MessageResult, it
+// For non-result messages with Usage, it sets ContextUsedTokens to the per-call
+// context fill (InputTokens + CacheReadTokens + CacheWriteTokens) — reflecting
+// that individual API call's fill, not the running peak — and updates maxCallFill
+// with the peak input-side fill across all API calls in the turn. Mid-turn
+// ContextUsedTokens is only set when the backend hasn't already provided an
+// authoritative value (same == 0 guard as MessageResult). For MessageResult, it
 // applies the tracked max (when the backend hasn't already set ContextUsedTokens)
 // and resets the accumulator for the next turn.
 //
@@ -465,7 +470,14 @@ func applyContextFill(msg *agentrun.Message, maxCallFill int) int {
 		return 0
 	}
 	if msg.Usage != nil && msg.Type != agentrun.MessageResult {
-		maxCallFill = max(maxCallFill, callContextFill(msg.Usage))
+		fill := callContextFill(msg.Usage)
+		if msg.Usage.ContextUsedTokens == 0 {
+			msg.Usage.ContextUsedTokens = fill
+		}
+		// maxCallFill always uses the computed fill, not the backend-provided
+		// ContextUsedTokens, so the peak calculation stays consistent even when
+		// a backend overrides individual mid-turn messages.
+		maxCallFill = max(maxCallFill, fill)
 	}
 	if msg.Type == agentrun.MessageResult {
 		if maxCallFill > 0 && msg.Usage != nil && msg.Usage.ContextUsedTokens == 0 {
