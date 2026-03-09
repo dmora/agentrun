@@ -10,12 +10,14 @@
 // discriminator field via the updateParsers map.
 //
 // Adding a new update type = one map entry + one function.
+// Delta types that need accumulation also add a case in turnAccumulator.observe().
 package acp
 
 import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dmora/agentrun"
@@ -331,4 +333,83 @@ func parseAvailableCommandsUpdate(_ json.RawMessage) *agentrun.Message {
 		Content: "available_commands_update",
 	}
 	return &msg
+}
+
+// --- Delta accumulation ---
+
+const maxAccumulatedContent = 10 << 20 // 10 MiB
+
+// turnAccumulator collects delta content for a single turn.
+// Thread-safe: observe() and seal() may be called from different goroutines.
+// Once sealed, observe() is a no-op. seal() is idempotent (returns nil on
+// repeated calls). Mirrors turnDenials in process.go.
+type turnAccumulator struct {
+	mu       sync.Mutex
+	text     strings.Builder
+	thinking strings.Builder
+	sealed   bool
+}
+
+// observe records delta content from a parsed message.
+// No-op after seal, for nil messages, non-delta types, or empty content.
+// Truncates the incoming chunk at the cap boundary so total accumulated
+// content never exceeds maxAccumulatedContent per field.
+func (ta *turnAccumulator) observe(msg *agentrun.Message) {
+	if msg == nil {
+		return
+	}
+	ta.mu.Lock()
+	defer ta.mu.Unlock()
+	if ta.sealed {
+		return
+	}
+	switch msg.Type {
+	case agentrun.MessageTextDelta:
+		if msg.Content != "" && ta.text.Len() < maxAccumulatedContent {
+			ta.text.WriteString(truncateToCap(msg.Content, ta.text.Len()))
+		}
+	case agentrun.MessageThinkingDelta:
+		if msg.Content != "" && ta.thinking.Len() < maxAccumulatedContent {
+			ta.thinking.WriteString(truncateToCap(msg.Content, ta.thinking.Len()))
+		}
+	}
+}
+
+// truncateToCap returns s truncated so that currentLen + len(result) <= maxAccumulatedContent.
+// Returns s unchanged if it already fits.
+func truncateToCap(s string, currentLen int) string {
+	remaining := maxAccumulatedContent - currentLen
+	if remaining <= 0 {
+		return ""
+	}
+	if len(s) <= remaining {
+		return s
+	}
+	return s[:remaining]
+}
+
+// seal returns synthesized complete messages (thinking before text) and
+// prevents further accumulation. Returns nil if no content was accumulated
+// or if already sealed (idempotent). Resets builders after extraction.
+func (ta *turnAccumulator) seal() []agentrun.Message {
+	ta.mu.Lock()
+	defer ta.mu.Unlock()
+	if ta.sealed {
+		return nil
+	}
+	ta.sealed = true
+	var msgs []agentrun.Message
+	if s := ta.thinking.String(); s != "" {
+		msgs = append(msgs, agentrun.Message{
+			Type: agentrun.MessageThinking, Content: s, Timestamp: time.Now(),
+		})
+	}
+	if s := ta.text.String(); s != "" {
+		msgs = append(msgs, agentrun.Message{
+			Type: agentrun.MessageText, Content: s, Timestamp: time.Now(),
+		})
+	}
+	ta.thinking.Reset()
+	ta.text.Reset()
+	return msgs
 }

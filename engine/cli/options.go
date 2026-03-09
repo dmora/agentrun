@@ -1,6 +1,9 @@
 package cli
 
-import "time"
+import (
+	"io"
+	"time"
+)
 
 // Default engine configuration values.
 const (
@@ -21,6 +24,18 @@ type EngineOptions struct {
 
 	// GracePeriod is the duration to wait after SIGTERM before sending SIGKILL.
 	GracePeriod time.Duration
+
+	// StderrWriter receives subprocess stderr output when non-nil.
+	// The writer's lifetime must span the entire engine lifecycle including
+	// resumes, since spawn-per-turn backends start new subprocesses on each
+	// Send call. When nil, subprocess stderr is discarded (connected to
+	// os.DevNull by exec.Cmd).
+	//
+	// Concurrency: the subprocess stderr goroutine writes to this writer
+	// concurrently with engine operations. Implementations must be safe
+	// for concurrent use if the caller reads or resets the writer between
+	// turns.
+	StderrWriter io.Writer
 }
 
 // EngineOption configures an Engine at construction time.
@@ -60,6 +75,16 @@ func WithGracePeriod(d time.Duration) EngineOption {
 		if d > 0 {
 			o.GracePeriod = d
 		}
+	}
+}
+
+// WithStderrWriter sets a writer to receive subprocess stderr output.
+// The writer's lifetime must span the entire engine lifecycle including
+// resumes, since spawn-per-turn backends start new subprocesses on each
+// Send call. Nil is a no-op (stderr is discarded via os.DevNull).
+func WithStderrWriter(w io.Writer) EngineOption {
+	return func(o *EngineOptions) {
+		o.StderrWriter = w
 	}
 }
 

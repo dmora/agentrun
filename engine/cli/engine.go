@@ -115,7 +115,7 @@ func (e *Engine) Start(_ context.Context, session agentrun.Session, opts ...agen
 	}
 	env := agentrun.MergeEnv(os.Environ(), session.Env)
 
-	cmd, stdin, stdout, err := spawnCmd(resolvedBinary, args, session.CWD, useStreamer, env)
+	cmd, stdin, stdout, err := spawnCmd(resolvedBinary, args, session.CWD, useStreamer, env, e.opts.StderrWriter)
 	if err != nil {
 		return nil, fmt.Errorf("cli: start: %w", err)
 	}
@@ -125,10 +125,14 @@ func (e *Engine) Start(_ context.Context, session agentrun.Session, opts ...agen
 
 // spawnCmd builds, configures, and starts an exec.Cmd.
 // env is passed directly to cmd.Env — nil inherits the parent environment.
-func spawnCmd(binary string, args []string, dir string, wantStdin bool, env []string) (*exec.Cmd, io.WriteCloser, io.ReadCloser, error) {
+// stderr receives subprocess stderr when non-nil; nil discards it (os.DevNull).
+func spawnCmd(binary string, args []string, dir string, wantStdin bool, env []string, stderr io.Writer) (*exec.Cmd, io.WriteCloser, io.ReadCloser, error) {
 	cmd := exec.Command(binary, args...)
 	cmd.Dir = dir
 	cmd.Env = env
+	if stderr != nil {
+		cmd.Stderr = stderr
+	}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

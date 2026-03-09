@@ -136,6 +136,9 @@ func (e *Engine) spawnSubprocess(cwd string, env []string) (*exec.Cmd, io.WriteC
 		cmd.Dir = cwd
 	}
 	cmd.Env = env
+	if e.opts.StderrWriter != nil {
+		cmd.Stderr = e.opts.StderrWriter
+	}
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -159,6 +162,7 @@ func wireReadLoop(conn *Conn, p *process, hitl agentrun.HITL, _ EngineOptions) {
 	p.hitl = hitl
 
 	updateCh := make(chan agentrun.Message, updateQueueSize)
+	p.updateCh = updateCh
 	conn.OnNotification(MethodSessionUpdate, makeUpdateHandler(p, updateCh))
 
 	// Register a delegating wrapper. The real handler is swapped per-turn
@@ -185,7 +189,14 @@ func wireReadLoop(conn *Conn, p *process, hitl agentrun.HITL, _ EngineOptions) {
 	// ReadLoop goroutine: sole writer to output channel.
 	go func() {
 		conn.ReadLoop()
-		close(updateCh)     // signal dispatch goroutine to finish
+
+		// Close updateCh under lock — prevents emitUpdate() from panicking
+		// on a closed channel. Mirrors finish()/outputMu pattern.
+		p.updateMu.Lock()
+		p.updateChClosed = true
+		close(updateCh)
+		p.updateMu.Unlock()
+
 		dispatchDone.Wait() // wait for all queued updates to be emitted
 
 		// If ReadLoop failed (e.g., line too long), kill the subprocess

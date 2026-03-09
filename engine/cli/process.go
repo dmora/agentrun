@@ -582,7 +582,7 @@ func (p *process) resumeAfterCleanExit(ctx context.Context, message string) erro
 		return fmt.Errorf("%w: %s: %w", agentrun.ErrUnavailable, binary, err)
 	}
 
-	cmd, stdin, stdout, err := spawnCmd(resolvedBinary, args, p.session.CWD, p.caps.streamer != nil, p.env)
+	cmd, stdin, stdout, err := spawnCmd(resolvedBinary, args, p.session.CWD, p.caps.streamer != nil, p.env, p.opts.StderrWriter)
 	if err != nil {
 		return fmt.Errorf("cli: resume: %w", err)
 	}
@@ -615,7 +615,7 @@ func (p *process) resumeAfterCleanExit(ctx context.Context, message string) erro
 
 // spawnReplacement starts a new subprocess and readLoop after a Resumer swap.
 func (p *process) spawnReplacement(binary string, args []string) error {
-	cmd, stdin, stdout, err := spawnCmd(binary, args, p.session.CWD, p.caps.streamer != nil, p.env)
+	cmd, stdin, stdout, err := spawnCmd(binary, args, p.session.CWD, p.caps.streamer != nil, p.env, p.opts.StderrWriter)
 	if err != nil {
 		p.failReplacement(fmt.Errorf("cli: resume: %w", err))
 		return err
