@@ -383,11 +383,12 @@ func TestHandlePromptResult_WithDenials(t *testing.T) {
 	td.add(toolWrite, "no permission handler")
 
 	result := &promptResult{StopReason: "end_turn"}
-	if err := p.handlePromptResult(nil, result, td); err != nil {
+	ta := &turnAccumulator{}
+	if err := p.handlePromptResult(nil, result, td, ta); err != nil {
 		t.Fatalf("handlePromptResult: %v", err)
 	}
 
-	msg := receiveMessage(t, p)
+	msg := receiveUpdate(t, p)
 	if msg.Type != agentrun.MessageResult {
 		t.Errorf("Type = %q, want %q", msg.Type, agentrun.MessageResult)
 	}
@@ -405,13 +406,14 @@ func TestHandlePromptResult_WithDenials(t *testing.T) {
 func TestHandlePromptResult_NoDenials(t *testing.T) {
 	p := newTestProcess(t)
 	td := &turnDenials{}
+	ta := &turnAccumulator{}
 
 	result := &promptResult{StopReason: "end_turn"}
-	if err := p.handlePromptResult(nil, result, td); err != nil {
+	if err := p.handlePromptResult(nil, result, td, ta); err != nil {
 		t.Fatalf("handlePromptResult: %v", err)
 	}
 
-	msg := receiveMessage(t, p)
+	msg := receiveUpdate(t, p)
 	if msg.Denials != nil {
 		t.Errorf("Denials should be nil when empty, got %+v", msg.Denials)
 	}
@@ -421,8 +423,9 @@ func TestHandlePromptResult_ErrorDiscardsDenials(t *testing.T) {
 	p := newTestProcess(t)
 	td := &turnDenials{}
 	td.add(toolBash, "denied")
+	ta := &turnAccumulator{}
 
-	err := p.handlePromptResult(context.DeadlineExceeded, &promptResult{}, td)
+	err := p.handlePromptResult(context.DeadlineExceeded, &promptResult{}, td, ta)
 	if err == nil {
 		t.Fatal("expected error")
 	}

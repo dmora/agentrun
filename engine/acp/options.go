@@ -2,6 +2,7 @@ package acp
 
 import (
 	"context"
+	"io"
 	"time"
 )
 
@@ -60,6 +61,17 @@ type EngineOptions struct {
 
 	// PermissionHandler is called when the agent requests client-side permission.
 	PermissionHandler PermissionHandler
+
+	// StderrWriter receives subprocess stderr output when non-nil.
+	// The writer's lifetime must span the entire engine lifecycle
+	// (ACP uses a single persistent subprocess). When nil, subprocess
+	// stderr is discarded (connected to os.DevNull by exec.Cmd).
+	//
+	// Concurrency: the subprocess stderr goroutine writes to this writer
+	// concurrently with engine operations. Implementations must be safe
+	// for concurrent use if the caller reads or resets the writer between
+	// turns.
+	StderrWriter io.Writer
 }
 
 // EngineOption configures an Engine at construction time.
@@ -125,6 +137,15 @@ func WithPermissionTimeout(d time.Duration) EngineOption {
 		if d > 0 {
 			o.PermissionTimeout = d
 		}
+	}
+}
+
+// WithStderrWriter sets a writer to receive subprocess stderr output.
+// The writer's lifetime must span the entire engine lifecycle.
+// Nil is a no-op (stderr is discarded via os.DevNull).
+func WithStderrWriter(w io.Writer) EngineOption {
+	return func(o *EngineOptions) {
+		o.StderrWriter = w
 	}
 }
 

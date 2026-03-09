@@ -331,6 +331,151 @@ func TestUnmarshalError_Truncation(t *testing.T) {
 	}
 }
 
+// --- turnAccumulator unit tests ---
+
+func TestTurnAccumulator_ObserveAndSeal(t *testing.T) {
+	ta := &turnAccumulator{}
+	ta.observe(&agentrun.Message{Type: agentrun.MessageThinkingDelta, Content: "think"})
+	ta.observe(&agentrun.Message{Type: agentrun.MessageTextDelta, Content: "Hello "})
+	ta.observe(&agentrun.Message{Type: agentrun.MessageTextDelta, Content: "world"})
+
+	msgs := ta.seal()
+	if len(msgs) != 2 {
+		t.Fatalf("seal returned %d messages, want 2", len(msgs))
+	}
+	// Thinking before text.
+	if msgs[0].Type != agentrun.MessageThinking || msgs[0].Content != "think" {
+		t.Errorf("msgs[0] = {%q, %q}, want {thinking, think}", msgs[0].Type, msgs[0].Content)
+	}
+	if msgs[1].Type != agentrun.MessageText || msgs[1].Content != "Hello world" {
+		t.Errorf("msgs[1] = {%q, %q}, want {text, Hello world}", msgs[1].Type, msgs[1].Content)
+	}
+	for i, m := range msgs {
+		if m.Timestamp.IsZero() {
+			t.Errorf("msgs[%d].Timestamp should be set", i)
+		}
+	}
+}
+
+func TestTurnAccumulator_EmptyDeltaIgnored(t *testing.T) {
+	ta := &turnAccumulator{}
+	ta.observe(&agentrun.Message{Type: agentrun.MessageTextDelta, Content: ""})
+	ta.observe(&agentrun.Message{Type: agentrun.MessageThinkingDelta, Content: ""})
+
+	msgs := ta.seal()
+	if msgs != nil {
+		t.Errorf("seal should return nil for empty deltas, got %+v", msgs)
+	}
+}
+
+func TestTurnAccumulator_SealedObserveNoop(t *testing.T) {
+	ta := &turnAccumulator{}
+	ta.observe(&agentrun.Message{Type: agentrun.MessageTextDelta, Content: "before"})
+	ta.seal()
+
+	// Observe after seal — should be no-op.
+	ta.observe(&agentrun.Message{Type: agentrun.MessageTextDelta, Content: "after"})
+	// Second seal returns nil (idempotent).
+	msgs := ta.seal()
+	if msgs != nil {
+		t.Errorf("post-seal observe should be ignored, got %+v", msgs)
+	}
+}
+
+func TestTurnAccumulator_SealIdempotent(t *testing.T) {
+	ta := &turnAccumulator{}
+	ta.observe(&agentrun.Message{Type: agentrun.MessageTextDelta, Content: "data"})
+
+	msgs1 := ta.seal()
+	if len(msgs1) != 1 {
+		t.Fatalf("first seal returned %d messages, want 1", len(msgs1))
+	}
+
+	msgs2 := ta.seal()
+	if msgs2 != nil {
+		t.Errorf("second seal should return nil, got %+v", msgs2)
+	}
+}
+
+func TestTurnAccumulator_NilMessage(t *testing.T) {
+	ta := &turnAccumulator{}
+	ta.observe(nil) // should not panic
+
+	msgs := ta.seal()
+	if msgs != nil {
+		t.Errorf("seal should return nil after observing nil, got %+v", msgs)
+	}
+}
+
+func TestTurnAccumulator_TextOnly(t *testing.T) {
+	ta := &turnAccumulator{}
+	ta.observe(&agentrun.Message{Type: agentrun.MessageTextDelta, Content: "only text"})
+
+	msgs := ta.seal()
+	if len(msgs) != 1 {
+		t.Fatalf("seal returned %d messages, want 1", len(msgs))
+	}
+	if msgs[0].Type != agentrun.MessageText {
+		t.Errorf("Type = %q, want %q", msgs[0].Type, agentrun.MessageText)
+	}
+}
+
+func TestTurnAccumulator_ThinkingOnly(t *testing.T) {
+	ta := &turnAccumulator{}
+	ta.observe(&agentrun.Message{Type: agentrun.MessageThinkingDelta, Content: "only thinking"})
+
+	msgs := ta.seal()
+	if len(msgs) != 1 {
+		t.Fatalf("seal returned %d messages, want 1", len(msgs))
+	}
+	if msgs[0].Type != agentrun.MessageThinking {
+		t.Errorf("Type = %q, want %q", msgs[0].Type, agentrun.MessageThinking)
+	}
+}
+
+func TestTurnAccumulator_MaxContentCap(t *testing.T) {
+	ta := &turnAccumulator{}
+	chunk := strings.Repeat("x", 1024*1024) // 1 MiB per observe
+	for range 12 {
+		ta.observe(&agentrun.Message{Type: agentrun.MessageTextDelta, Content: chunk})
+	}
+
+	msgs := ta.seal()
+	if len(msgs) != 1 {
+		t.Fatalf("seal returned %d messages, want 1", len(msgs))
+	}
+	// Truncation ensures total never exceeds maxAccumulatedContent.
+	if len(msgs[0].Content) != maxAccumulatedContent {
+		t.Errorf("content length = %d, want exactly %d", len(msgs[0].Content), maxAccumulatedContent)
+	}
+}
+
+func TestTurnAccumulator_TruncatesChunkAtBoundary(t *testing.T) {
+	ta := &turnAccumulator{}
+	// Fill to 1 byte below cap.
+	ta.observe(&agentrun.Message{
+		Type:    agentrun.MessageTextDelta,
+		Content: strings.Repeat("a", maxAccumulatedContent-1),
+	})
+	// Next chunk is 100 bytes — only 1 byte should be accepted.
+	ta.observe(&agentrun.Message{
+		Type:    agentrun.MessageTextDelta,
+		Content: strings.Repeat("b", 100),
+	})
+
+	msgs := ta.seal()
+	if len(msgs) != 1 {
+		t.Fatalf("seal returned %d messages, want 1", len(msgs))
+	}
+	if len(msgs[0].Content) != maxAccumulatedContent {
+		t.Errorf("content length = %d, want %d", len(msgs[0].Content), maxAccumulatedContent)
+	}
+	// Last character should be "b" (truncated chunk).
+	if msgs[0].Content[len(msgs[0].Content)-1] != 'b' {
+		t.Error("expected last byte to be from truncated chunk")
+	}
+}
+
 // FuzzParseSessionUpdate verifies that arbitrary inputs never panic.
 func FuzzParseSessionUpdate(f *testing.F) {
 	f.Add([]byte(`{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hello"}}`))

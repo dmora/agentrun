@@ -53,6 +53,16 @@ type process struct {
 	hitl        agentrun.HITL                   // session-scoped, set in wireReadLoop
 	permHandler atomic.Pointer[permHandlerFunc] // delegated permission handler
 	rpcDone     chan struct{}                   // closed when current turn's conn.Call goroutine exits
+
+	// Per-turn delta accumulation — mirrors turnDenials/permHandler pattern.
+	// Swapped per-turn via atomic.Pointer. Nil between turns.
+	turnAccum atomic.Pointer[turnAccumulator]
+
+	// updateCh routes messages through the dispatch goroutine for
+	// strict ordering. Set once by wireReadLoop, never reassigned.
+	updateCh       chan agentrun.Message
+	updateMu       sync.Mutex // guards updateCh close (mirrors outputMu)
+	updateChClosed bool
 }
 
 var _ agentrun.Process = (*process)(nil)
@@ -111,16 +121,19 @@ func (p *process) Send(ctx context.Context, message string) error {
 		}
 	}
 
-	// --- Create per-turn denial collector and handler ---
+	// --- Create per-turn collectors ---
 	td := &turnDenials{}
+	ta := &turnAccumulator{}
 	handler := p.makeTurnPermHandler(td)
 	p.permHandler.Store(&handler)
+	p.turnAccum.Store(ta)
 
-	// Deactivate turn handler on ALL exit paths — late permission requests
-	// from this turn must hit deny-all, not the next turn's handler.
+	// Deactivate on ALL exit paths — late permission requests / notifications
+	// from this turn must hit deny-all / nil accumulator, not the next turn's.
 	defer func() {
 		denyAll := denyAllPermHandler
 		p.permHandler.Store(&denyAll)
+		p.turnAccum.Store(nil)
 	}()
 
 	// Send session/prompt request.
@@ -143,9 +156,10 @@ func (p *process) Send(ctx context.Context, message string) error {
 	select {
 	case err := <-errCh:
 		p.rpcDone = nil // normal completion — no fencing needed next time
-		return p.handlePromptResult(err, &result, td)
+		return p.handlePromptResult(err, &result, td, ta)
 	case <-p.done:
 		td.seal() // discard
+		ta.seal() // discard accumulated content
 		// Drain errCh first — the RPC may have completed.
 		// Cannot call handlePromptResult here because finish() has
 		// already closed the output channel — emit() would panic.
@@ -160,6 +174,7 @@ func (p *process) Send(ctx context.Context, message string) error {
 		return agentrun.ErrTerminated
 	case <-ctx.Done():
 		td.seal() // seal collector (mid-execution handlers discard)
+		ta.seal() // discard accumulated content
 		// Best-effort cancel — fire in a goroutine so a stalled subprocess
 		// or conn.mu contention cannot block Send from returning and
 		// releasing turnMu. The goroutine is bounded: the subprocess will
@@ -172,12 +187,19 @@ func (p *process) Send(ctx context.Context, message string) error {
 	}
 }
 
-// handlePromptResult processes a completed prompt RPC, emitting MessageResult on success.
-func (p *process) handlePromptResult(err error, result *promptResult, td *turnDenials) error {
+// handlePromptResult processes a completed prompt RPC. Seals the accumulator,
+// then routes synthesized complete messages and MessageResult through updateCh
+// for strict ordering with notification-driven deltas.
+func (p *process) handlePromptResult(err error, result *promptResult, td *turnDenials, ta *turnAccumulator) error {
 	if err != nil {
 		td.seal() // discard denials on error
+		ta.seal() // discard accumulated content
 		return fmt.Errorf("acp: prompt: %w", err)
 	}
+
+	// Seal accumulator — synthesized complete messages (thinking before text).
+	synthesized := ta.seal()
+
 	msg := agentrun.Message{
 		Type:       agentrun.MessageResult,
 		StopReason: stoputil.Sanitize(result.StopReason),
@@ -199,8 +221,41 @@ func (p *process) handlePromptResult(err error, result *promptResult, td *turnDe
 			}
 		}
 	}
-	p.emit(msg)
+
+	// Route through updateCh: dispatch goroutine emits in order —
+	// remaining deltas → synthesized complete messages → result.
+	for _, sm := range synthesized {
+		p.emitUpdate(sm)
+	}
+	p.emitUpdate(msg)
 	return nil
+}
+
+// emitUpdate sends a message through updateCh for ordered dispatch.
+// Used by handlePromptResult to route synthesized + result messages
+// through the same channel as notification-driven deltas.
+//
+// Holds updateMu for the entire check+send to prevent a data race with
+// wireReadLoop closing updateCh. Mirrors the emit()/outputMu pattern.
+//
+// Intentional drop semantics: messages are silently discarded when
+// updateChClosed is true (ReadLoop exited, channel closed — process is
+// shutting down) or when ctx.Done() fires (Stop() cancelled the context
+// to unblock senders on a full channel). In both cases the process is
+// terminating and no consumer will read these messages.
+func (p *process) emitUpdate(msg agentrun.Message) {
+	if msg.Timestamp.IsZero() {
+		msg.Timestamp = time.Now()
+	}
+	p.updateMu.Lock()
+	defer p.updateMu.Unlock()
+	if p.updateChClosed {
+		return
+	}
+	select {
+	case p.updateCh <- msg:
+	case <-p.ctx.Done():
+	}
 }
 
 // Stop terminates the session. Safe to call multiple times.
@@ -370,6 +425,11 @@ func (p *process) processMetaSnapshot() *agentrun.ProcessMeta {
 // params and sends the resulting message to updateCh. Runs synchronously in
 // ReadLoop but writes to updateCh (not the output channel) to avoid blocking
 // RPC response dispatch.
+//
+// Single-goroutine invariant: this handler runs inside ReadLoop's goroutine,
+// so it can send to updateCh without the updateMu guard — the channel is
+// only closed by wireReadLoop after ReadLoop returns, guaranteeing the
+// channel is open for the lifetime of this handler.
 func makeUpdateHandler(p *process, updateCh chan<- agentrun.Message) func(json.RawMessage) {
 	return func(params json.RawMessage) {
 		var notif sessionNotification
@@ -389,6 +449,12 @@ func makeUpdateHandler(p *process, updateCh chan<- agentrun.Message) func(json.R
 		if msg == nil {
 			return // parser returned nil (no data to report)
 		}
+
+		// Accumulate delta content for turn-level synthesis.
+		if ta := p.turnAccum.Load(); ta != nil {
+			ta.observe(msg)
+		}
+
 		select {
 		case updateCh <- *msg:
 		case <-p.ctx.Done():

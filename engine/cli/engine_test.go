@@ -1990,3 +1990,132 @@ func TestProcessMeta_OnInit(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// WithStderrWriter tests
+// ---------------------------------------------------------------------------
+
+func TestWithStderrWriter_InitialSpawn(t *testing.T) {
+	var buf strings.Builder
+	b := withResumer(testBackend{
+		spawnFn: func(_ agentrun.Session) (string, []string) {
+			return binBash, []string{"-c", "echo hello-stderr >&2; echo __RESULT__"}
+		},
+		parseFn: resultParser,
+	})
+	eng := cli.NewEngine(b, cli.WithStderrWriter(&buf))
+	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t), Prompt: "x"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	drain(p)
+	_ = p.Stop(context.Background())
+
+	got := strings.TrimSpace(buf.String())
+	if got != "hello-stderr" {
+		t.Errorf("stderr = %q, want %q", got, "hello-stderr")
+	}
+}
+
+func TestWithStderrWriter_ResumeAfterCleanExit(t *testing.T) {
+	var buf strings.Builder
+	b := &testResumerBackend{
+		testBackend: testBackend{
+			spawnFn: func(_ agentrun.Session) (string, []string) {
+				return binBash, []string{"-c", "echo spawn-stderr >&2; echo __RESULT__"}
+			},
+			parseFn: resultParser,
+		},
+		resumeFn: func(_ agentrun.Session, _ string) (string, []string, error) {
+			return binBash, []string{"-c", "echo resume-stderr >&2; echo __RESULT__"}, nil
+		},
+	}
+	eng := cli.NewEngine(b, cli.WithStderrWriter(&buf))
+	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t), Prompt: "x"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	drain(p) // first turn
+
+	if err := p.Send(testCtx(t), "turn2"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	drain(p) // second turn
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = p.Stop(ctx)
+
+	got := buf.String()
+	if !strings.Contains(got, "spawn-stderr") {
+		t.Errorf("stderr missing spawn output, got %q", got)
+	}
+	if !strings.Contains(got, "resume-stderr") {
+		t.Errorf("stderr missing resume output, got %q", got)
+	}
+}
+
+func TestWithStderrWriter_Nil_NoOp(t *testing.T) {
+	b := withResumer(testBackend{
+		spawnFn: func(_ agentrun.Session) (string, []string) {
+			return binBash, []string{"-c", "echo err >&2; echo __RESULT__"}
+		},
+		parseFn: resultParser,
+	})
+	// nil StderrWriter — should not panic.
+	eng := cli.NewEngine(b, cli.WithStderrWriter(nil))
+	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t), Prompt: "x"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	drain(p)
+	_ = p.Stop(context.Background())
+}
+
+func TestWithStderrWriter_SpawnReplacement(t *testing.T) {
+	// Tests the Resumer-only (no Streamer) path where spawnReplacement
+	// is called via replaceSubprocess. Verifies StderrWriter receives
+	// output from both the initial spawn and the replacement subprocess.
+	var buf strings.Builder
+	b := &testResumerBackend{
+		testBackend: testBackend{
+			spawnFn: func(_ agentrun.Session) (string, []string) {
+				// Long-lived: outputs stderr then waits for SIGTERM.
+				return binBash, []string{"-c", "echo spawn-stderr >&2; echo initial; sleep 60"}
+			},
+			parseFn: resultParser,
+		},
+		resumeFn: func(_ agentrun.Session, _ string) (string, []string, error) {
+			return binBash, []string{"-c", "echo replace-stderr >&2; echo __RESULT__"}, nil
+		},
+	}
+	eng := cli.NewEngine(b, cli.WithStderrWriter(&buf))
+	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t)})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// Read initial message from spawn.
+	msg := <-p.Output()
+	if msg.Content != "initial" {
+		t.Fatalf("expected 'initial', got %q", msg.Content)
+	}
+
+	// Send triggers replaceSubprocess → spawnReplacement (kills old, spawns new).
+	if err := p.Send(testCtx(t), "resumed"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	drain(p)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = p.Stop(ctx)
+
+	got := buf.String()
+	if !strings.Contains(got, "spawn-stderr") {
+		t.Errorf("stderr missing initial spawn output, got %q", got)
+	}
+	if !strings.Contains(got, "replace-stderr") {
+		t.Errorf("stderr missing replacement subprocess output, got %q", got)
+	}
+}

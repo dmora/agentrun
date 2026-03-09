@@ -188,10 +188,12 @@ func TestEngine_Send_StreamsUpdates(t *testing.T) {
 	for _, m := range msgs {
 		typeSet[m.Type] = true
 	}
-	// ACP streams delta-only — no completed aggregates (MessageThinking, MessageText).
+	// ACP engine synthesizes MessageText/MessageThinking from accumulated deltas.
 	for _, want := range []agentrun.MessageType{
 		agentrun.MessageThinkingDelta,
 		agentrun.MessageTextDelta,
+		agentrun.MessageThinking,
+		agentrun.MessageText,
 		agentrun.MessageToolUse,
 		agentrun.MessageToolResult,
 		agentrun.MessageResult,
@@ -209,6 +211,16 @@ func TestEngine_Send_StreamsUpdates(t *testing.T) {
 	thinkingDeltas := concatContent(msgs, agentrun.MessageThinkingDelta)
 	if thinkingDeltas != "Let me think" {
 		t.Errorf("thinking deltas = %q, want %q", thinkingDeltas, "Let me think")
+	}
+
+	// Synthesized MessageText should match concatenated deltas.
+	synthesizedText := concatContent(msgs, agentrun.MessageText)
+	if synthesizedText != mockTextContent {
+		t.Errorf("synthesized text = %q, want %q", synthesizedText, mockTextContent)
+	}
+	synthesizedThinking := concatContent(msgs, agentrun.MessageThinking)
+	if synthesizedThinking != "Let me think" {
+		t.Errorf("synthesized thinking = %q, want %q", synthesizedThinking, "Let me think")
 	}
 }
 
@@ -244,6 +256,43 @@ func TestEngine_Send_MultiTurn(t *testing.T) {
 	if !hasResult(msgs2) {
 		t.Error("turn 2 missing MessageResult")
 	}
+
+	// Verify each turn has synthesized MessageText (no cross-turn leakage).
+	text1 := concatContent(msgs1, agentrun.MessageText)
+	text2 := concatContent(msgs2, agentrun.MessageText)
+	if text1 == "" {
+		t.Error("turn 1 missing synthesized MessageText")
+	}
+	if text2 == "" {
+		t.Error("turn 2 missing synthesized MessageText")
+	}
+}
+
+func TestEngine_DualWrite_DeltaAndAccumulator(t *testing.T) {
+	proc, ctx := startProc(t)
+	<-proc.Output() // drain init
+
+	if err := proc.Send(ctx, "test"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	msgs := collectUntilResult(proc.Output())
+
+	// Verify deltas are present (streaming consumers work).
+	deltaText := concatContent(msgs, agentrun.MessageTextDelta)
+	if deltaText == "" {
+		t.Fatal("no MessageTextDelta messages received")
+	}
+
+	// Verify synthesized MessageText matches concatenated deltas.
+	var synthesizedText string
+	for _, m := range msgs {
+		if m.Type == agentrun.MessageText {
+			synthesizedText = m.Content
+		}
+	}
+	if synthesizedText != deltaText {
+		t.Errorf("synthesized text = %q, delta concat = %q", synthesizedText, deltaText)
+	}
 }
 
 func TestEngine_Stop_Graceful(t *testing.T) {
@@ -267,19 +316,27 @@ func TestEngine_CompletedFilter(t *testing.T) {
 		t.Fatalf("send: %v", err)
 	}
 
-	// Stop the process so the filtered channel closes.
+	// Drain through the Completed filter until MessageResult BEFORE calling Stop().
+	// Messages are delivered asynchronously to output via updateCh dispatch —
+	// calling Stop() before draining is racy.
+	completedCh := filter.Completed(ctx, proc.Output())
+	var msgs []agentrun.Message
+	for msg := range completedCh {
+		msgs = append(msgs, msg)
+		if msg.Type == agentrun.MessageResult {
+			break
+		}
+	}
 	_ = proc.Stop(context.Background())
 
-	msgs := collectMessages(filter.Completed(ctx, proc.Output()))
 	for _, m := range msgs {
 		if filter.IsDelta(m.Type) {
 			t.Errorf("delta message %q should not pass Completed filter", m.Type)
 		}
 	}
 
-	// ACP streams delta-only — Completed filter drops text/thinking content.
-	// Only non-delta types pass through: MessageToolUse, MessageToolResult,
-	// MessageSystem, MessageResult.
+	// ACP engine now synthesizes MessageText/MessageThinking from accumulated
+	// deltas — Completed filter passes them through alongside tool events.
 	typeSet := make(map[agentrun.MessageType]bool)
 	for _, m := range msgs {
 		typeSet[m.Type] = true
@@ -287,11 +344,19 @@ func TestEngine_CompletedFilter(t *testing.T) {
 	for _, want := range []agentrun.MessageType{
 		agentrun.MessageToolUse,
 		agentrun.MessageToolResult,
+		agentrun.MessageText,
+		agentrun.MessageThinking,
 		agentrun.MessageResult,
 	} {
 		if !typeSet[want] {
 			t.Errorf("missing %q in Completed output", want)
 		}
+	}
+
+	// Verify synthesized MessageText content matches expected mock output.
+	synthesizedText := concatContent(msgs, agentrun.MessageText)
+	if synthesizedText != mockTextContent {
+		t.Errorf("Completed MessageText content = %q, want %q", synthesizedText, mockTextContent)
 	}
 }
 
@@ -1252,4 +1317,55 @@ func TestEngine_OversizedMessage(t *testing.T) {
 	if !strings.Contains(waitErr.Error(), "line too long") {
 		t.Errorf("error = %v, want to contain 'line too long'", waitErr)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// WithStderrWriter tests
+// ---------------------------------------------------------------------------
+
+func TestWithStderrWriter_ACP(t *testing.T) {
+	mustBuild(t)
+	// Create a wrapper script that writes to stderr before exec'ing mock.
+	dir := t.TempDir()
+	wrapper := filepath.Join(dir, "mock-acp-stderr")
+	script := fmt.Sprintf("#!/bin/sh\necho acp-stderr >&2\nexec %s \"$@\"\n", mockBinaryPath)
+	if err := os.WriteFile(wrapper, []byte(script), 0o600); err != nil {
+		t.Fatalf("write wrapper: %v", err)
+	}
+	if err := os.Chmod(wrapper, 0o755); err != nil {
+		t.Fatalf("chmod wrapper: %v", err)
+	}
+
+	var buf strings.Builder
+	engine := acp.NewEngine(acp.WithBinary(wrapper), acp.WithStderrWriter(&buf))
+
+	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	defer cancel()
+
+	proc, err := engine.Start(ctx, agentrun.Session{CWD: t.TempDir()})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	<-proc.Output() // drain init
+	_ = proc.Stop(context.Background())
+
+	got := strings.TrimSpace(buf.String())
+	if got != "acp-stderr" {
+		t.Errorf("stderr = %q, want %q", got, "acp-stderr")
+	}
+}
+
+func TestWithStderrWriter_ACP_Nil_NoOp(t *testing.T) {
+	engine := newEngine(t, acp.WithStderrWriter(nil))
+
+	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	defer cancel()
+
+	proc, err := engine.Start(ctx, agentrun.Session{CWD: t.TempDir()})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	<-proc.Output() // drain init
+	_ = proc.Stop(context.Background())
+	// No panic = success.
 }
