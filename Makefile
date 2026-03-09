@@ -1,4 +1,4 @@
-.PHONY: qa lint test test-race check cover vet tidy-check vulncheck bench fuzz fmt tidy examples-tidy-check examples-build smoke smoke-streaming
+.PHONY: qa lint test test-race check cover vet tidy-check vulncheck bench fuzz fmt tidy examples-tidy-check examples-build smoke smoke-streaming mcp-test mcp-build mcp-tidy-check mcp-qa
 
 # ---- Composite targets ----
 
@@ -76,6 +76,23 @@ examples-build:
 	cd examples && go build ./...
 
 # ---- Smoke test (standalone, requires claude CLI) ----
+
+# ---- MCP diagnostic server (separate from qa — isolates SDK dep) ----
+
+mcp-test:
+	cd cmd/agentrun-mcp && go test -race -count=1 ./...
+
+mcp-build:
+	cd cmd/agentrun-mcp && go build -o ../../bin/agentrun-mcp .
+
+mcp-tidy-check:  ## Verify MCP module go.mod/go.sum are clean
+	@cd cmd/agentrun-mcp && \
+	go mod tidy && \
+	git diff --quiet --exit-code -- go.mod && \
+	{ [ ! -f go.sum ] || git diff --quiet --exit-code -- go.sum; } || \
+	{ echo "FAIL: cmd/agentrun-mcp module is not tidy. Run 'cd cmd/agentrun-mcp && go mod tidy' and commit." >&2; exit 1; }
+
+mcp-qa: mcp-tidy-check mcp-test mcp-build  ## Full quality gate for MCP server
 
 smoke:  ## Run Claude smoke test (requires claude CLI, not in qa)
 	@command -v claude >/dev/null 2>&1 || { echo "SKIP smoke: claude binary not found"; exit 0; }

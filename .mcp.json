@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "agentrun": {
+      "command": "/Users/davidmora/Projects/github.com/dmora/agentrun/bin/agentrun-mcp",
+      "args": ["--workspace", "/Users/davidmora/Projects/github.com/dmora/agentrun", "--acp-binary", "opencode", "--acp-arg", "acp"]
+    }
+  }
+}
