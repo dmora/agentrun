@@ -218,3 +218,144 @@ func TestRunTurn_MessagePassthrough(t *testing.T) {
 		t.Fatal("timed out waiting for Send to be called")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// SequentialSender (sequential path) tests
+// ---------------------------------------------------------------------------
+
+func TestRunTurn_Sequential_Normal(t *testing.T) {
+	smp := newSequentialMockProcess()
+	smp.sendFn = func(_ context.Context, _ string) error {
+		// Simulate spawn-per-turn: replace output channel on Send.
+		smp.output = make(chan Message, 16)
+		smp.output <- Message{Type: MessageText, Content: "hello"}
+		smp.output <- Message{Type: MessageResult, Content: "done"}
+		return nil
+	}
+
+	var msgs []Message
+	err := RunTurn(context.Background(), smp, "prompt", func(msg Message) error {
+		msgs = append(msgs, msg)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RunTurn error: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("got %d messages, want 2", len(msgs))
+	}
+	if msgs[0].Type != MessageText {
+		t.Errorf("msgs[0].Type = %q, want %q", msgs[0].Type, MessageText)
+	}
+	if msgs[1].Type != MessageResult {
+		t.Errorf("msgs[1].Type = %q, want %q", msgs[1].Type, MessageResult)
+	}
+}
+
+func TestRunTurn_Sequential_SendError(t *testing.T) {
+	smp := newSequentialMockProcess()
+	sendErr := errors.New("send failed")
+	smp.sendFn = func(_ context.Context, _ string) error {
+		return sendErr
+	}
+
+	handlerCalled := false
+	err := RunTurn(context.Background(), smp, "prompt", func(_ Message) error {
+		handlerCalled = true
+		return nil
+	})
+	if !errors.Is(err, sendErr) {
+		t.Errorf("err = %v, want %v", err, sendErr)
+	}
+	if handlerCalled {
+		t.Error("handler should not be called when Send fails")
+	}
+}
+
+func TestRunTurn_Sequential_ContextCancel(t *testing.T) {
+	smp := newSequentialMockProcess()
+	smp.sendFn = func(ctx context.Context, _ string) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately.
+
+	err := RunTurn(ctx, smp, "prompt", func(_ Message) error {
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+}
+
+func TestRunTurn_Sequential_ChannelClose(t *testing.T) {
+	smp := newSequentialMockProcess()
+	crashErr := errors.New("process crashed")
+	smp.sendFn = func(_ context.Context, _ string) error {
+		// Simulate subprocess crash: replace channel, close it, set termErr.
+		smp.output = make(chan Message, 16)
+		smp.termErr = crashErr
+		smp.done = make(chan struct{})
+		close(smp.output)
+		close(smp.done)
+		return nil
+	}
+
+	err := RunTurn(context.Background(), smp, "prompt", func(_ Message) error {
+		return nil
+	})
+	if err == nil || err.Error() != "process crashed" {
+		t.Errorf("err = %v, want 'process crashed'", err)
+	}
+}
+
+func TestRunTurn_Sequential_HandlerError(t *testing.T) {
+	smp := newSequentialMockProcess()
+	smp.sendFn = func(_ context.Context, _ string) error {
+		smp.output = make(chan Message, 16)
+		smp.output <- Message{Type: MessageText, Content: "hello"}
+		smp.output <- Message{Type: MessageResult, Content: "done"}
+		return nil
+	}
+
+	handlerErr := errors.New("handler abort")
+	err := RunTurn(context.Background(), smp, "prompt", func(_ Message) error {
+		return handlerErr
+	})
+	if !errors.Is(err, handlerErr) {
+		t.Errorf("err = %v, want %v", err, handlerErr)
+	}
+}
+
+func TestRunTurn_Sequential_FreshChannel(t *testing.T) {
+	// Verify RunTurn reads from the channel returned by Output() AFTER Send
+	// completes, not from a stale pre-Send reference.
+	smp := newSequentialMockProcess()
+	// Pre-populate original channel with stale data.
+	smp.output <- Message{Type: MessageText, Content: "stale"}
+
+	smp.sendFn = func(_ context.Context, _ string) error {
+		// Replace channel, simulating spawn-per-turn subprocess replacement.
+		smp.output = make(chan Message, 16)
+		smp.output <- Message{Type: MessageText, Content: "fresh"}
+		smp.output <- Message{Type: MessageResult, Content: "done"}
+		return nil
+	}
+
+	var msgs []Message
+	err := RunTurn(context.Background(), smp, "prompt", func(msg Message) error {
+		msgs = append(msgs, msg)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RunTurn error: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("got %d messages, want 2", len(msgs))
+	}
+	if msgs[0].Content != "fresh" {
+		t.Errorf("msgs[0].Content = %q, want %q (should read from fresh channel)", msgs[0].Content, "fresh")
+	}
+}

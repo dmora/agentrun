@@ -54,3 +54,14 @@ func (m *mockProcess) close() {
 	close(m.output)
 	close(m.done)
 }
+
+// sequentialMockProcess wraps mockProcess to satisfy SequentialSender.
+type sequentialMockProcess struct{ *mockProcess }
+
+var _ SequentialSender = (*sequentialMockProcess)(nil)
+
+func (s *sequentialMockProcess) SequentialSend() {}
+
+func newSequentialMockProcess() *sequentialMockProcess {
+	return &sequentialMockProcess{newMockProcess()}
+}
