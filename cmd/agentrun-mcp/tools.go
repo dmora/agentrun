@@ -294,6 +294,9 @@ func handleRunTurn(ctx context.Context, _ *mcp.CallToolRequest, input runTurnInp
 }
 
 func buildRunSession(input runTurnInput) (agentrun.Session, error) {
+	if len(input.Prompt) > maxMessageBytes {
+		return agentrun.Session{}, fmt.Errorf("prompt too large (%d bytes, max %d)", len(input.Prompt), maxMessageBytes)
+	}
 	cwd, err := validateCWD(input.CWD, workspaceRoot)
 	if err != nil {
 		return agentrun.Session{}, err

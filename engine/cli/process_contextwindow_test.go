@@ -72,6 +72,15 @@ func TestSynthesizeContextWindow(t *testing.T) {
 			want: false,
 		},
 		{
+			name: "error with usage — no synthesis",
+			msg: agentrun.Message{
+				Type:      agentrun.MessageError,
+				Usage:     &agentrun.Usage{ContextUsedTokens: 50000},
+				Timestamp: ts,
+			},
+			want: false,
+		},
+		{
 			name: "nil usage — no synthesis",
 			msg: agentrun.Message{
 				Type:      agentrun.MessageText,

@@ -383,19 +383,21 @@ func (p *process) emitWithSynthesis(ctx context.Context, msg agentrun.Message) b
 
 // synthesizeContextWindow creates a MessageContextWindow to emit after a
 // mid-turn content message with context fill data. Returns nil when no
-// synthesis is needed (result, init, or no fill data).
+// synthesis is needed (result, init, error, or no fill data).
 func synthesizeContextWindow(msg agentrun.Message) *agentrun.Message {
-	if msg.Type == agentrun.MessageResult || msg.Type == agentrun.MessageInit {
+	switch msg.Type {
+	case agentrun.MessageResult, agentrun.MessageInit, agentrun.MessageError:
 		return nil
 	}
-	if msg.Usage == nil || (msg.Usage.ContextUsedTokens == 0 && msg.Usage.ContextSizeTokens == 0) {
+	used, size, ok := agentrun.ContextFill(msg)
+	if !ok {
 		return nil
 	}
 	return &agentrun.Message{
 		Type: agentrun.MessageContextWindow,
 		Usage: &agentrun.Usage{
-			ContextUsedTokens: msg.Usage.ContextUsedTokens,
-			ContextSizeTokens: msg.Usage.ContextSizeTokens,
+			ContextUsedTokens: used,
+			ContextSizeTokens: size,
 		},
 		Timestamp: msg.Timestamp,
 	}

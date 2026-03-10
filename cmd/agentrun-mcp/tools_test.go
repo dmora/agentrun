@@ -179,6 +179,21 @@ func TestListBackends_CapabilityDetection(t *testing.T) {
 // buildRunSession tests
 // ---------------------------------------------------------------------------
 
+func TestBuildRunSession_RejectsOversizedPrompt(t *testing.T) {
+	workspaceRoot = t.TempDir()
+	oversized := make([]byte, maxMessageBytes+1)
+	for i := range oversized {
+		oversized[i] = 'x'
+	}
+	_, err := buildRunSession(runTurnInput{
+		Backend: backendClaude,
+		Prompt:  string(oversized),
+	})
+	if err == nil {
+		t.Fatal("expected error for oversized prompt")
+	}
+}
+
 func TestBuildRunSession_ValidatesEnv(t *testing.T) {
 	workspaceRoot = t.TempDir()
 	_, err := buildRunSession(runTurnInput{
