@@ -50,3 +50,21 @@ func ExampleWithTimeout() {
 	fmt.Println(opts.Timeout)
 	// Output: 10s
 }
+
+func ExampleContextFill() {
+	msg := agentrun.Message{
+		Type: agentrun.MessageContextWindow,
+		Usage: &agentrun.Usage{
+			ContextUsedTokens: 45000,
+			ContextSizeTokens: 200000,
+		},
+	}
+	used, size, ok := agentrun.ContextFill(msg)
+	fmt.Println(ok)
+	fmt.Println(used)
+	fmt.Println(size)
+	// Output:
+	// true
+	// 45000
+	// 200000
+}
