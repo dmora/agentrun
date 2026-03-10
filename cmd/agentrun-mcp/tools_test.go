@@ -101,52 +101,38 @@ func TestExplainSession_ValidatesEnv(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestMakeEngine_ValidBackends(t *testing.T) {
-	tests := []struct {
-		name         string
-		spawnPerTurn bool
-	}{
-		{backendClaude, false},
-		{backendCodex, true},
-		{backendOpenCode, true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			engine, spt, err := makeEngine(tt.name, nil, "", nil)
+	for _, name := range []string{backendClaude, backendCodex, backendOpenCode} {
+		t.Run(name, func(t *testing.T) {
+			engine, err := makeEngine(name, nil, "", nil)
 			if err != nil {
 				t.Fatalf("makeEngine: %v", err)
 			}
 			if engine == nil {
 				t.Fatal("engine should not be nil")
 			}
-			if spt != tt.spawnPerTurn {
-				t.Errorf("spawnPerTurn = %v, want %v", spt, tt.spawnPerTurn)
-			}
 		})
 	}
 }
 
 func TestMakeEngine_ACP_NoBinary(t *testing.T) {
-	_, _, err := makeEngine(backendACP, nil, "", nil)
+	_, err := makeEngine(backendACP, nil, "", nil)
 	if err == nil {
 		t.Fatal("expected error when ACP binary is empty")
 	}
 }
 
 func TestMakeEngine_ACP_WithBinary(t *testing.T) {
-	engine, spt, err := makeEngine(backendACP, nil, "/usr/bin/echo", nil)
+	engine, err := makeEngine(backendACP, nil, "/usr/bin/echo", nil)
 	if err != nil {
 		t.Fatalf("makeEngine: %v", err)
 	}
 	if engine == nil {
 		t.Fatal("engine should not be nil")
 	}
-	if spt {
-		t.Error("ACP should not be spawn-per-turn")
-	}
 }
 
 func TestMakeEngine_Unknown(t *testing.T) {
-	_, _, err := makeEngine("invalid", nil, "", nil)
+	_, err := makeEngine("invalid", nil, "", nil)
 	if err == nil {
 		t.Fatal("expected error for unknown backend")
 	}
@@ -186,27 +172,6 @@ func TestListBackends_CapabilityDetection(t *testing.T) {
 	}
 	if !hasCodex("resumer") {
 		t.Error("codex should have resumer capability")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// drainSpawnPerTurn tests
-// ---------------------------------------------------------------------------
-
-func TestDrainSpawnPerTurn_ChannelClose(t *testing.T) {
-	ch := make(chan agentrun.Message, 3)
-	ch <- agentrun.Message{Type: agentrun.MessageText, Content: "a"}
-	ch <- agentrun.Message{Type: agentrun.MessageResult}
-	close(ch)
-
-	var msgs []agentrun.Message
-	proc := &fakeProcess{output: ch}
-	drainSpawnPerTurn(t.Context(), proc, func(msg agentrun.Message) error {
-		msgs = append(msgs, msg)
-		return nil
-	})
-	if len(msgs) != 2 {
-		t.Errorf("got %d messages, want 2", len(msgs))
 	}
 }
 
@@ -508,14 +473,13 @@ func TestSessionLifecycle(t *testing.T) {
 	sessions.create(&sessionEntry{
 		id:           id,
 		backend:      backendClaude,
-		spawnPerTurn: true,
 		stderrW:      &cappedWriter{max: 1024},
 		createdAt:    time.Now(),
 		lastActivity: time.Now(),
 		proc:         proc,
 	})
 
-	// Send to the session (spawn-per-turn path).
+	// Send to the session.
 	out, err := doSessionSend(context.Background(), sessionSendInput{
 		SessionID: id,
 		Message:   "follow-up",
@@ -536,7 +500,7 @@ func TestSessionLifecycle(t *testing.T) {
 	}
 }
 
-func TestSessionSend_SpawnPerTurn(t *testing.T) {
+func TestSessionSend_RunTurn(t *testing.T) {
 	sessions = newSessionStore(maxLiveSessions)
 
 	ch := make(chan agentrun.Message, 10)
@@ -554,7 +518,6 @@ func TestSessionSend_SpawnPerTurn(t *testing.T) {
 	sessions.create(&sessionEntry{
 		id:           id,
 		backend:      backendCodex,
-		spawnPerTurn: true,
 		stderrW:      &cappedWriter{max: 1024},
 		createdAt:    time.Now(),
 		lastActivity: time.Now(),

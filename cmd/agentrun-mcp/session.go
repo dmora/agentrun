@@ -28,7 +28,6 @@ type sessionEntry struct {
 	id           string
 	proc         agentrun.Process
 	backend      string
-	spawnPerTurn bool
 	stderrW      *cappedWriter
 	createdAt    time.Time
 	lastActivity time.Time
