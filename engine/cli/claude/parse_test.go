@@ -1094,6 +1094,50 @@ func TestParseLine_ResultDenialsWithStopReason(t *testing.T) {
 	}
 }
 
+// --- is_error parse tests ---
+
+func TestParseLine_ResultWithIsErrorTrue(t *testing.T) {
+	b := New()
+	line := `{"type":"result","is_error":true,"result":"Prompt is too long","usage":{"input_tokens":100,"output_tokens":0}}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Type != agentrun.MessageResult {
+		t.Errorf("type = %q, want %q", msg.Type, agentrun.MessageResult)
+	}
+	if !msg.IsError {
+		t.Error("IsError should be true")
+	}
+	if msg.Content != "Prompt is too long" {
+		t.Errorf("Content = %q, want %q", msg.Content, "Prompt is too long")
+	}
+}
+
+func TestParseLine_ResultWithIsErrorFalse(t *testing.T) {
+	b := New()
+	line := `{"type":"result","is_error":false,"result":"ok","usage":{"input_tokens":10,"output_tokens":5}}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.IsError {
+		t.Error("IsError should be false when is_error is false")
+	}
+}
+
+func TestParseLine_ResultWithIsErrorAbsent(t *testing.T) {
+	b := New()
+	line := `{"type":"result","result":"ok","usage":{"input_tokens":10,"output_tokens":5}}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.IsError {
+		t.Error("IsError should be false when is_error field is absent")
+	}
+}
+
 // --- Fuzz test ---
 
 func FuzzParseLine(f *testing.F) {

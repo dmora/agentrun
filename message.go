@@ -146,6 +146,13 @@ type Message struct {
 	// Nil on all other message types and for API-based engines.
 	Process *ProcessMeta `json:"process,omitempty"`
 
+	// IsError indicates that the result content represents an error condition
+	// reported by the agent itself (e.g., "Prompt is too long"). Set exclusively
+	// on MessageResult messages when the backend's result event includes
+	// is_error: true. When true, Content contains the error description.
+	// Default false means normal completion.
+	IsError bool `json:"is_error,omitempty"`
+
 	// Denials lists tool invocations that were denied during this turn.
 	// Set exclusively on MessageResult messages when one or more tool calls
 	// were blocked by permission controls (e.g., dontAsk mode, HITL rejection).
