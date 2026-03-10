@@ -105,8 +105,9 @@ func TestApplyContextFill_MultiCallTurn(t *testing.T) {
 		t.Errorf("msg[0] ContextUsedTokens = %d, want %d", msgs[0].Usage.ContextUsedTokens, wantCall0)
 	}
 	wantCall1 := 7000 + 4000 + 100
-	if msgs[1].Usage.ContextUsedTokens != wantCall1 {
-		t.Errorf("msg[1] ContextUsedTokens = %d, want %d", msgs[1].Usage.ContextUsedTokens, wantCall1)
+	// msgs[1] is the synthesized MessageContextWindow for msg[0]; msg[1] is at index 2.
+	if msgs[2].Usage.ContextUsedTokens != wantCall1 {
+		t.Errorf("msg[2] ContextUsedTokens = %d, want %d", msgs[2].Usage.ContextUsedTokens, wantCall1)
 	}
 	// Result: peak across calls = call 2's fill.
 	if result.Usage.ContextUsedTokens != wantCall1 {
@@ -171,9 +172,10 @@ func TestApplyContextFill_TwoTurnsReset(t *testing.T) {
 		t.Errorf("turn 1 result ContextUsedTokens = %d, want %d", results[0].Usage.ContextUsedTokens, wantTurn1)
 	}
 	// Turn 2 mid-turn: per-call fill = 8000+1000 = 9000 (not stale 11000)
+	// msgs layout: [0]=text, [1]=synth-ctx, [2]=result1, [3]=text, [4]=synth-ctx, [5]=result2
 	wantTurn2 := 8000 + 1000
-	if msgs[2].Usage.ContextUsedTokens != wantTurn2 {
-		t.Errorf("turn 2 mid-turn ContextUsedTokens = %d, want %d", msgs[2].Usage.ContextUsedTokens, wantTurn2)
+	if msgs[3].Usage.ContextUsedTokens != wantTurn2 {
+		t.Errorf("turn 2 mid-turn ContextUsedTokens = %d, want %d", msgs[3].Usage.ContextUsedTokens, wantTurn2)
 	}
 	if results[1].Usage.ContextUsedTokens != wantTurn2 {
 		t.Errorf("turn 2 result ContextUsedTokens = %d, want %d", results[1].Usage.ContextUsedTokens, wantTurn2)
@@ -305,9 +307,10 @@ func TestApplyContextFill_MidTurnMessages(t *testing.T) {
 		t.Errorf("msg[0] ContextUsedTokens = %d, want %d", msgs[0].Usage.ContextUsedTokens, wantMsg0)
 	}
 	// msg[1] gets its own per-call fill, NOT the peak-so-far from msg[0].
+	// msgs[1] is the synthesized MessageContextWindow for msg[0]; original msg[1] is at index 2.
 	wantMsg1 := 5000 + 3000 + 200
-	if msgs[1].Usage.ContextUsedTokens != wantMsg1 {
-		t.Errorf("msg[1] ContextUsedTokens = %d, want %d (per-call, not peak)", msgs[1].Usage.ContextUsedTokens, wantMsg1)
+	if msgs[2].Usage.ContextUsedTokens != wantMsg1 {
+		t.Errorf("msg[2] ContextUsedTokens = %d, want %d (per-call, not peak)", msgs[2].Usage.ContextUsedTokens, wantMsg1)
 	}
 	// Result: peak across both calls.
 	result := findResult(msgs)
