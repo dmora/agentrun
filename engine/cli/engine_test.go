@@ -2119,3 +2119,48 @@ func TestWithStderrWriter_SpawnReplacement(t *testing.T) {
 		t.Errorf("stderr missing replacement subprocess output, got %q", got)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// SequentialSender type assertion tests
+// ---------------------------------------------------------------------------
+
+func TestStart_ResumerOnly_ReturnsSequentialSender(t *testing.T) {
+	backend := echoResumerBackend()
+	e := cli.NewEngine(backend)
+	proc, err := e.Start(testCtx(t), agentrun.Session{CWD: tempDir(t), Prompt: "test"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = proc.Stop(testCtx(t)) }()
+	drain(proc)
+	if _, ok := proc.(agentrun.SequentialSender); !ok {
+		t.Errorf("Resumer-only backend should return SequentialSender, got %T", proc)
+	}
+}
+
+func TestStart_Streamer_DoesNotReturnSequentialSender(t *testing.T) {
+	backend := &testStreamerBackend{
+		testBackend: testBackend{
+			spawnFn: func(s agentrun.Session) (string, []string) {
+				return binEcho, []string{s.Prompt}
+			},
+			parseFn: resultParser,
+		},
+		streamFn: func(s agentrun.Session) (string, []string) {
+			return binPrintf, []string{"%s\\n__RESULT__\\n", s.Prompt}
+		},
+		formatFn: func(msg string) ([]byte, error) {
+			return []byte(msg + "\n"), nil
+		},
+	}
+	e := cli.NewEngine(backend)
+	proc, err := e.Start(testCtx(t), agentrun.Session{CWD: tempDir(t), Prompt: "test"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = proc.Stop(testCtx(t)) }()
+	drain(proc)
+	if _, ok := proc.(agentrun.SequentialSender); ok {
+		t.Errorf("Streamer backend should NOT return SequentialSender, got %T", proc)
+	}
+}

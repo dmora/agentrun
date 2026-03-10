@@ -78,6 +78,14 @@ type process struct {
 
 var _ agentrun.Process = (*process)(nil)
 
+// sequentialProcess wraps a CLI process to satisfy agentrun.SequentialSender.
+// Used for spawn-per-turn backends (Resumer without Streamer).
+type sequentialProcess struct{ *process }
+
+func (s *sequentialProcess) SequentialSend() {}
+
+var _ agentrun.SequentialSender = (*sequentialProcess)(nil)
+
 // newProcess creates and starts a process with its initial readLoop.
 func newProcess(
 	backend Backend,
