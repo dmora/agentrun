@@ -78,6 +78,14 @@ type process struct {
 
 var _ agentrun.Process = (*process)(nil)
 
+// sequentialProcess wraps a CLI process to satisfy agentrun.SequentialSender.
+// Used for spawn-per-turn backends (Resumer without Streamer).
+type sequentialProcess struct{ *process }
+
+func (s *sequentialProcess) SequentialSend() {}
+
+var _ agentrun.SequentialSender = (*sequentialProcess)(nil)
+
 // newProcess creates and starts a process with its initial readLoop.
 func newProcess(
 	backend Backend,
@@ -345,11 +353,53 @@ func (p *process) scanLines(ctx context.Context, stdout io.ReadCloser) error {
 		}
 		lastStopReason, maxCallFill = p.enrichMessage(&msg, lastStopReason, maxCallFill)
 
-		select {
-		case p.output <- msg:
-		case <-ctx.Done():
+		if !p.emitWithSynthesis(ctx, msg) {
 			return nil
 		}
+	}
+}
+
+// emitWithSynthesis sends msg to the output channel and, when the message
+// carries context fill data, follows it with a synthesized MessageContextWindow.
+// Returns false if the context was cancelled (caller should return).
+func (p *process) emitWithSynthesis(ctx context.Context, msg agentrun.Message) bool {
+	synth := synthesizeContextWindow(msg)
+
+	select {
+	case p.output <- msg:
+	case <-ctx.Done():
+		return false
+	}
+
+	if synth != nil {
+		select {
+		case p.output <- *synth:
+		case <-ctx.Done():
+			return false
+		}
+	}
+	return true
+}
+
+// synthesizeContextWindow creates a MessageContextWindow to emit after a
+// mid-turn content message with context fill data. Returns nil when no
+// synthesis is needed (result, init, error, or no fill data).
+func synthesizeContextWindow(msg agentrun.Message) *agentrun.Message {
+	switch msg.Type {
+	case agentrun.MessageResult, agentrun.MessageInit, agentrun.MessageError:
+		return nil
+	}
+	used, size, ok := agentrun.ContextFill(msg)
+	if !ok {
+		return nil
+	}
+	return &agentrun.Message{
+		Type: agentrun.MessageContextWindow,
+		Usage: &agentrun.Usage{
+			ContextUsedTokens: used,
+			ContextSizeTokens: size,
+		},
+		Timestamp: msg.Timestamp,
 	}
 }
 

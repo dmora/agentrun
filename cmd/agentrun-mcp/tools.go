@@ -294,6 +294,9 @@ func handleRunTurn(ctx context.Context, _ *mcp.CallToolRequest, input runTurnInp
 }
 
 func buildRunSession(input runTurnInput) (agentrun.Session, error) {
+	if len(input.Prompt) > maxMessageBytes {
+		return agentrun.Session{}, fmt.Errorf("prompt too large (%d bytes, max %d)", len(input.Prompt), maxMessageBytes)
+	}
 	cwd, err := validateCWD(input.CWD, workspaceRoot)
 	if err != nil {
 		return agentrun.Session{}, err
@@ -347,7 +350,7 @@ func doRunTurn(ctx context.Context, input runTurnInput) (*runTurnOutput, error) 
 	}
 
 	stderrW := &cappedWriter{max: 1 << 20}
-	engine, spawnPerTurn, err := makeEngine(input.Backend, stderrW, acpBinary, []string(acpArgs))
+	engine, err := makeEngine(input.Backend, stderrW, acpBinary, []string(acpArgs))
 	if err != nil {
 		return nil, err
 	}
@@ -367,14 +370,9 @@ func doRunTurn(ctx context.Context, input runTurnInput) (*runTurnOutput, error) 
 		return nil
 	}
 
-	var turnErr error
-	if spawnPerTurn {
-		drainSpawnPerTurn(ctx, proc, handler)
-	} else {
-		turnErr = agentrun.RunTurn(ctx, proc, input.Prompt, handler)
-		if turnErr != nil {
-			log.Warn("RunTurn error", "error", turnErr)
-		}
+	turnErr := agentrun.RunTurn(ctx, proc, input.Prompt, handler)
+	if turnErr != nil {
+		log.Warn("RunTurn error", "error", turnErr)
 	}
 
 	out := collectTerminalState(proc, messages, start, stderrW)
@@ -386,24 +384,6 @@ func doRunTurn(ctx context.Context, input runTurnInput) (*runTurnOutput, error) 
 	}
 	log.Info("run_turn complete", "messages", len(messages), "duration", out.Duration)
 	return out, nil
-}
-
-// drainSpawnPerTurn drains proc.Output() with defensive ctx.Done() handling,
-// matching how RunTurn's drainOutput works.
-func drainSpawnPerTurn(ctx context.Context, proc agentrun.Process, handler func(agentrun.Message) error) {
-	for {
-		select {
-		case msg, ok := <-proc.Output():
-			if !ok {
-				return
-			}
-			if err := handler(msg); err != nil {
-				return
-			}
-		case <-ctx.Done():
-			return
-		}
-	}
 }
 
 // --- Tool 6: session_start ---
@@ -457,7 +437,7 @@ func doSessionStart(ctx context.Context, input sessionStartInput) (*sessionStart
 	}
 
 	stderrW := &cappedWriter{max: 1 << 20}
-	engine, spawnPerTurn, err := makeEngine(input.Backend, stderrW, acpBinary, []string(acpArgs))
+	engine, err := makeEngine(input.Backend, stderrW, acpBinary, []string(acpArgs))
 	if err != nil {
 		return nil, err
 	}
@@ -475,14 +455,9 @@ func doSessionStart(ctx context.Context, input sessionStartInput) (*sessionStart
 		messages = append(messages, msg)
 		return nil
 	}
-	var turnErr error
-	if spawnPerTurn {
-		drainSpawnPerTurn(ctx, proc, handler)
-	} else {
-		turnErr = agentrun.RunTurn(ctx, proc, input.Prompt, handler)
-		if turnErr != nil {
-			log.Warn("first turn error", "error", turnErr)
-		}
+	turnErr := agentrun.RunTurn(ctx, proc, input.Prompt, handler)
+	if turnErr != nil {
+		log.Warn("first turn error", "error", turnErr)
 	}
 
 	duration := time.Since(start).Round(time.Millisecond).String()
@@ -499,7 +474,7 @@ func doSessionStart(ctx context.Context, input sessionStartInput) (*sessionStart
 		return out, nil
 	}
 
-	sessionID, err := registerSession(proc, input.Backend, spawnPerTurn, stderrW)
+	sessionID, err := registerSession(proc, input.Backend, stderrW)
 	if err != nil {
 		stopProcess(proc)
 		return nil, err
@@ -517,7 +492,7 @@ func doSessionStart(ctx context.Context, input sessionStartInput) (*sessionStart
 
 // registerSession generates a session ID, builds the entry, and inserts it
 // into the global session store. Returns the session ID on success.
-func registerSession(proc agentrun.Process, backend string, spawnPerTurn bool, stderrW *cappedWriter) (string, error) {
+func registerSession(proc agentrun.Process, backend string, stderrW *cappedWriter) (string, error) {
 	sessionID, err := generateSessionID()
 	if err != nil {
 		return "", err
@@ -527,7 +502,6 @@ func registerSession(proc agentrun.Process, backend string, spawnPerTurn bool, s
 		id:           sessionID,
 		proc:         proc,
 		backend:      backend,
-		spawnPerTurn: spawnPerTurn,
 		stderrW:      stderrW,
 		createdAt:    now,
 		lastActivity: now,
@@ -601,17 +575,7 @@ func doSessionSend(ctx context.Context, input sessionSendInput) (*sessionSendOut
 		return nil
 	}
 
-	var turnErr error
-	if entry.spawnPerTurn {
-		// Send first (spawns new subprocess), then drain from fresh channel.
-		if err := entry.proc.Send(ctx, input.Message); err != nil {
-			turnErr = err
-		} else {
-			drainSpawnPerTurn(ctx, entry.proc, handler)
-		}
-	} else {
-		turnErr = agentrun.RunTurn(ctx, entry.proc, input.Message, handler)
-	}
+	turnErr := agentrun.RunTurn(ctx, entry.proc, input.Message, handler)
 
 	stderr := scrubStderr(entry.stderrW.Bytes(), 2048)
 	entry.lastActivity = time.Now()
@@ -711,7 +675,7 @@ func doProbe(ctx context.Context, backend string) (*probeOutput, error) {
 	log.Info("probing backend")
 
 	stderrW := &cappedWriter{max: 1 << 20}
-	engine, spawnPerTurn, err := makeEngine(backend, stderrW, acpBinary, []string(acpArgs))
+	engine, err := makeEngine(backend, stderrW, acpBinary, []string(acpArgs))
 	if err != nil {
 		return &probeOutput{Error: err.Error()}, nil
 	}
@@ -725,23 +689,13 @@ func doProbe(ctx context.Context, backend string) (*probeOutput, error) {
 	}
 	defer stopProcess(proc)
 
-	sendErrCh := make(chan error, 1)
-	if !spawnPerTurn {
-		go func() { sendErrCh <- proc.Send(ctx, "Say 'hello'.") }()
-	} else {
-		close(sendErrCh)
-	}
-
 	out := &probeOutput{SpawnsOK: true}
-	drainProbeMessages(ctx, proc, out)
-
-	// Check if Send completed with an error.
-	select {
-	case err := <-sendErrCh:
-		if err != nil && out.Error == "" {
-			out.Error = fmt.Sprintf("send: %v", err)
-		}
-	default:
+	turnErr := agentrun.RunTurn(ctx, proc, "Say 'hello'.", func(msg agentrun.Message) error {
+		applyProbeInit(msg, out)
+		return nil
+	})
+	if turnErr != nil && out.Error == "" {
+		out.Error = fmt.Sprintf("turn: %v", turnErr)
 	}
 
 	log.Info("probe complete", "spawns_ok", out.SpawnsOK, "emits_init", out.EmitsInit)
@@ -757,23 +711,6 @@ func probeSession() agentrun.Session {
 			agentrun.OptionMode:     string(agentrun.ModePlan),
 			agentrun.OptionMaxTurns: "1",
 		},
-	}
-}
-
-func drainProbeMessages(ctx context.Context, proc agentrun.Process, out *probeOutput) {
-	for {
-		select {
-		case msg, ok := <-proc.Output():
-			if !ok {
-				return
-			}
-			applyProbeInit(msg, out)
-			if msg.Type == agentrun.MessageResult {
-				return
-			}
-		case <-ctx.Done():
-			return
-		}
 	}
 }
 

@@ -120,7 +120,11 @@ func (e *Engine) Start(_ context.Context, session agentrun.Session, opts ...agen
 		return nil, fmt.Errorf("cli: start: %w", err)
 	}
 
-	return newProcess(e.backend, caps, session, e.opts, env, cmd, stdin, stdout), nil
+	p := newProcess(e.backend, caps, session, e.opts, env, cmd, stdin, stdout)
+	if caps.resumer != nil && !useStreamer {
+		return &sequentialProcess{p}, nil
+	}
+	return p, nil
 }
 
 // spawnCmd builds, configures, and starts an exec.Cmd.

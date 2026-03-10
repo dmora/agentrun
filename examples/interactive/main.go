@@ -3,9 +3,9 @@
 // Command interactive demonstrates multi-turn conversations with agentrun.
 // It supports Claude, OpenCode, Codex, and ACP backends via the --backend flag.
 //
-// Claude uses streaming stdin; OpenCode and Codex use spawn-per-turn.
-// ACP uses a persistent JSON-RPC 2.0 subprocess — turns are instant after
-// the first MCP cold boot.
+// All backends use [agentrun.RunTurn] for turn execution — spawn-per-turn
+// backends (OpenCode, Codex) satisfy [agentrun.SequentialSender], so RunTurn
+// handles them transparently.
 //
 // Session resume: the session ID is captured from MessageInit.ResumeID and
 // printed at session start. Pass --resume <id> to resume a saved session.
@@ -25,7 +25,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -62,7 +61,7 @@ func main() {
 }
 
 func run(backendName, binaryName, argsStr, resumeID string) error {
-	engine, spawnPerTurn, err := makeEngine(backendName, binaryName, argsStr)
+	engine, err := makeEngine(backendName, binaryName, argsStr)
 	if err != nil {
 		return err
 	}
@@ -105,24 +104,12 @@ func run(backendName, binaryName, argsStr, resumeID string) error {
 		_ = proc.Stop(stopCtx)
 	}()
 
-	// Build turn function based on backend mode.
-	turn := streamingTurn
-	if spawnPerTurn {
-		turn = spawnTurn
+	// First turn — RunTurn handles all engine types.
+	if err := executeTurn(ctx, proc, firstPrompt); err != nil {
+		return err
 	}
 
-	// First turn: spawn-per-turn bakes prompt into args; streaming sends explicitly.
-	if spawnPerTurn {
-		if err := drainTurn(ctx, proc); err != nil {
-			return err
-		}
-	} else {
-		if err := sendAndDrain(ctx, proc, firstPrompt); err != nil {
-			return fmt.Errorf("send first prompt: %w", err)
-		}
-	}
-
-	return repl(ctx, proc, scanner, turn)
+	return repl(ctx, proc, scanner)
 }
 
 // buildSession creates a session with optional resume support.
@@ -136,24 +123,23 @@ func buildSession(cwd, prompt, resumeID string) agentrun.Session {
 	return agentrun.Session{CWD: cwd, Prompt: prompt, Options: opts}
 }
 
-// makeEngine creates an engine by name. Returns the engine and whether it
-// uses spawn-per-turn semantics (vs streaming).
-func makeEngine(name, binary, argsStr string) (agentrun.Engine, bool, error) {
+// makeEngine creates an engine by name.
+func makeEngine(name, binary, argsStr string) (agentrun.Engine, error) {
 	switch name {
 	case "claude":
-		return cli.NewEngine(claude.New()), false, nil
+		return cli.NewEngine(claude.New()), nil
 	case backendOpenCode:
-		return cli.NewEngine(opencode.New()), true, nil
+		return cli.NewEngine(opencode.New()), nil
 	case "codex":
-		return cli.NewEngine(codex.New()), true, nil
+		return cli.NewEngine(codex.New()), nil
 	case "acp":
 		if binary == "" {
 			binary = backendOpenCode
 		}
 		args := acpArgs(binary, argsStr)
-		return acp.NewEngine(acp.WithBinary(binary), acp.WithArgs(args...)), false, nil
+		return acp.NewEngine(acp.WithBinary(binary), acp.WithArgs(args...)), nil
 	default:
-		return nil, false, fmt.Errorf("unknown backend %q (valid: claude, opencode, codex, acp)", name)
+		return nil, fmt.Errorf("unknown backend %q (valid: claude, opencode, codex, acp)", name)
 	}
 }
 
@@ -175,7 +161,7 @@ func acpArgs(binary, argsStr string) []string {
 
 // repl runs the read-eval-print loop, reading user input from stdin
 // and sending it to the process until exit, quit, or EOF.
-func repl(ctx context.Context, proc agentrun.Process, scanner *bufio.Scanner, turn turnFunc) error {
+func repl(ctx context.Context, proc agentrun.Process, scanner *bufio.Scanner) error {
 	for {
 		fmt.Print("\nyou> ")
 		if !scanner.Scan() {
@@ -188,7 +174,7 @@ func repl(ctx context.Context, proc agentrun.Process, scanner *bufio.Scanner, tu
 		if line == "exit" || line == "quit" {
 			break
 		}
-		if err := turn(ctx, proc, line); err != nil {
+		if err := executeTurn(ctx, proc, line); err != nil {
 			return err
 		}
 	}
@@ -197,91 +183,14 @@ func repl(ctx context.Context, proc agentrun.Process, scanner *bufio.Scanner, tu
 	return nil
 }
 
-// turnFunc executes one conversation turn: send the message and drain output.
-type turnFunc func(ctx context.Context, proc agentrun.Process, message string) error
-
-// streamingTurn sends a message and drains output concurrently (ACP, Claude).
-func streamingTurn(ctx context.Context, proc agentrun.Process, message string) error {
-	return sendAndDrain(ctx, proc, message)
-}
-
-// spawnTurn sends a message then drains until the subprocess exits (OpenCode).
-func spawnTurn(ctx context.Context, proc agentrun.Process, message string) error {
-	if err := proc.Send(ctx, message); err != nil {
-		return fmt.Errorf("send: %w", err)
-	}
-	return drainTurn(ctx, proc)
-}
-
-// sendAndDrain runs Send() and drainTurn() concurrently for streaming backends.
-// Output is printed as it arrives while the RPC blocks. If Send() returns an
-// error (e.g. auth failure), drainTurn stops immediately.
-func sendAndDrain(ctx context.Context, proc agentrun.Process, message string) error {
-	drainCtx, drainCancel := context.WithCancel(ctx)
-	defer drainCancel()
-
-	// Drain output in background — prints messages as they arrive.
-	drainCh := make(chan error, 1)
-	go func() {
-		drainCh <- drainStreamingTurn(drainCtx, proc)
-	}()
-
-	// Send blocks until RPC response.
-	sendErr := proc.Send(ctx, message)
-
-	if sendErr != nil {
-		// RPC failed (auth error, etc.) — stop draining.
-		drainCancel()
-		<-drainCh // wait for drain goroutine to exit
-		return sendErr
-	}
-
-	// RPC succeeded — drain goroutine will see MessageResult and exit.
-	return <-drainCh
-}
-
-// drainTurn reads messages until a spawn-per-turn subprocess exits.
-func drainTurn(ctx context.Context, proc agentrun.Process) error {
+// executeTurn runs one conversation turn via RunTurn, printing messages
+// with delta-aware formatting.
+func executeTurn(ctx context.Context, proc agentrun.Process, message string) error {
 	var sawDelta bool
-	for {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("interrupted: %w", ctx.Err())
-		case msg, ok := <-proc.Output():
-			if !ok {
-				if err := proc.Err(); err != nil {
-					if code, ok := agentrun.ExitCode(err); ok {
-						return fmt.Errorf("process exited with code %d", code)
-					}
-					return fmt.Errorf("process exited: %w", err)
-				}
-				return nil // expected: subprocess exited, turn complete
-			}
-			sawDelta = handleStreamingMessage(msg, sawDelta)
-		}
-	}
-}
-
-// drainStreamingTurn reads messages until MessageResult or context cancellation.
-func drainStreamingTurn(ctx context.Context, proc agentrun.Process) error {
-	var sawDelta bool
-	for {
-		select {
-		case <-ctx.Done():
-			return nil // cancelled by sendAndDrain on Send() error
-		case msg, ok := <-proc.Output():
-			if !ok {
-				if err := proc.Err(); err != nil {
-					return fmt.Errorf("process exited: %w", err)
-				}
-				return errors.New("process exited unexpectedly")
-			}
-			sawDelta = handleStreamingMessage(msg, sawDelta)
-			if msg.Type == agentrun.MessageResult {
-				return nil // turn complete
-			}
-		}
-	}
+	return agentrun.RunTurn(ctx, proc, message, func(msg agentrun.Message) error {
+		sawDelta = handleStreamingMessage(msg, sawDelta)
+		return nil
+	})
 }
 
 // handleStreamingMessage prints a message with delta-aware formatting.

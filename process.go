@@ -49,3 +49,23 @@ type Process interface {
 	// Output channel is closed to distinguish clean exit from failure.
 	Err() error
 }
+
+// SequentialSender is an optional interface that [Process] implementations
+// may satisfy to signal that Send must complete before Output is drained
+// for the new turn's messages. [RunTurn] type-asserts on this interface:
+// when satisfied, it calls Send synchronously first, then drains Output;
+// when absent, it uses the default concurrent pattern (Send in goroutine).
+//
+// Spawn-per-turn CLI backends (Resumer without Streamer) satisfy this
+// because Send replaces the subprocess and Output channel, requiring
+// sequential ordering.
+//
+// Consumers who write [Process] wrappers (logging, metrics, retry) should
+// conditionally implement SequentialSender when the underlying process
+// satisfies it, so that [RunTurn] preserves the correct send/drain ordering.
+// A simple approach is to embed the wrapped process and delegate
+// SequentialSend via type assertion at construction time.
+type SequentialSender interface {
+	Process
+	SequentialSend() // marker method signaling send-then-drain ordering
+}
