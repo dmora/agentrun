@@ -1096,45 +1096,48 @@ func TestParseLine_ResultDenialsWithStopReason(t *testing.T) {
 
 // --- is_error parse tests ---
 
-func TestParseLine_ResultWithIsErrorTrue(t *testing.T) {
-	b := New()
-	line := `{"type":"result","is_error":true,"result":"Prompt is too long","usage":{"input_tokens":100,"output_tokens":0}}`
-	msg, err := b.ParseLine(line)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestParseLine_ResultIsError(t *testing.T) {
+	tests := []struct {
+		name        string
+		line        string
+		wantIsError bool
+		wantContent string
+	}{
+		{
+			name:        "is_error true",
+			line:        `{"type":"result","is_error":true,"result":"Prompt is too long","usage":{"input_tokens":100,"output_tokens":0}}`,
+			wantIsError: true,
+			wantContent: "Prompt is too long",
+		},
+		{
+			name:        "is_error false",
+			line:        `{"type":"result","is_error":false,"result":"ok","usage":{"input_tokens":10,"output_tokens":5}}`,
+			wantIsError: false,
+		},
+		{
+			name:        "is_error absent",
+			line:        `{"type":"result","result":"ok","usage":{"input_tokens":10,"output_tokens":5}}`,
+			wantIsError: false,
+		},
 	}
-	if msg.Type != agentrun.MessageResult {
-		t.Errorf("type = %q, want %q", msg.Type, agentrun.MessageResult)
-	}
-	if !msg.IsError {
-		t.Error("IsError should be true")
-	}
-	if msg.Content != "Prompt is too long" {
-		t.Errorf("Content = %q, want %q", msg.Content, "Prompt is too long")
-	}
-}
 
-func TestParseLine_ResultWithIsErrorFalse(t *testing.T) {
 	b := New()
-	line := `{"type":"result","is_error":false,"result":"ok","usage":{"input_tokens":10,"output_tokens":5}}`
-	msg, err := b.ParseLine(line)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if msg.IsError {
-		t.Error("IsError should be false when is_error is false")
-	}
-}
-
-func TestParseLine_ResultWithIsErrorAbsent(t *testing.T) {
-	b := New()
-	line := `{"type":"result","result":"ok","usage":{"input_tokens":10,"output_tokens":5}}`
-	msg, err := b.ParseLine(line)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if msg.IsError {
-		t.Error("IsError should be false when is_error field is absent")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg, err := b.ParseLine(tt.line)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if msg.Type != agentrun.MessageResult {
+				t.Errorf("type = %q, want %q", msg.Type, agentrun.MessageResult)
+			}
+			if msg.IsError != tt.wantIsError {
+				t.Errorf("IsError = %v, want %v", msg.IsError, tt.wantIsError)
+			}
+			if tt.wantContent != "" && msg.Content != tt.wantContent {
+				t.Errorf("Content = %q, want %q", msg.Content, tt.wantContent)
+			}
+		})
 	}
 }
 

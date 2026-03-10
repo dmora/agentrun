@@ -198,9 +198,7 @@ func parseResultMessage(raw map[string]any, msg *agentrun.Message) {
 		msg.StopReason = stoputil.Sanitize(sr)
 	}
 	msg.Denials = extractPermissionDenials(raw)
-	if isErr, ok := raw["is_error"].(bool); ok && isErr {
-		msg.IsError = true
-	}
+	msg.IsError, _ = raw["is_error"].(bool)
 }
 
 // parseErrorMessage handles "error" events.
