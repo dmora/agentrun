@@ -33,14 +33,17 @@ const (
 	MessageResult MessageType = "result"
 
 	// MessageContextWindow carries context window fill state emitted mid-turn.
-	// Contains window capacity and current fill level. Not all backends emit
-	// this type; it is currently produced by ACP's usage_update notification.
+	// Contains window capacity and current fill level.
 	//
-	// CLI backends do not emit MessageContextWindow. Instead, the CLI engine
-	// populates ContextUsedTokens on both mid-turn messages (per-call fill)
-	// and MessageResult (peak fill across all calls in the turn) as derived
-	// estimates when per-call usage data is available (e.g., Claude CLI).
-	// See Usage.ContextUsedTokens for details on both sources.
+	// Sources:
+	//   - ACP: produced by the usage_update notification (authoritative).
+	//   - CLI: synthesized by the engine after mid-turn content messages
+	//     (e.g., MessageText, MessageThinking) that have ContextUsedTokens
+	//     populated. The content message retains its original Usage for
+	//     backward compatibility; the synthesized MessageContextWindow
+	//     carries only ContextUsedTokens and ContextSizeTokens. Consumers
+	//     should not double-count — prefer MessageContextWindow for
+	//     context fill monitoring.
 	//
 	// Only ContextSizeTokens and ContextUsedTokens are meaningful on this
 	// message type. Other Usage fields (InputTokens, OutputTokens, CostUSD,

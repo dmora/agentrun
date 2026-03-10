@@ -353,11 +353,51 @@ func (p *process) scanLines(ctx context.Context, stdout io.ReadCloser) error {
 		}
 		lastStopReason, maxCallFill = p.enrichMessage(&msg, lastStopReason, maxCallFill)
 
-		select {
-		case p.output <- msg:
-		case <-ctx.Done():
+		if !p.emitWithSynthesis(ctx, msg) {
 			return nil
 		}
+	}
+}
+
+// emitWithSynthesis sends msg to the output channel and, when the message
+// carries context fill data, follows it with a synthesized MessageContextWindow.
+// Returns false if the context was cancelled (caller should return).
+func (p *process) emitWithSynthesis(ctx context.Context, msg agentrun.Message) bool {
+	synth := synthesizeContextWindow(msg)
+
+	select {
+	case p.output <- msg:
+	case <-ctx.Done():
+		return false
+	}
+
+	if synth != nil {
+		select {
+		case p.output <- *synth:
+		case <-ctx.Done():
+			return false
+		}
+	}
+	return true
+}
+
+// synthesizeContextWindow creates a MessageContextWindow to emit after a
+// mid-turn content message with context fill data. Returns nil when no
+// synthesis is needed (result, init, or no fill data).
+func synthesizeContextWindow(msg agentrun.Message) *agentrun.Message {
+	if msg.Type == agentrun.MessageResult || msg.Type == agentrun.MessageInit {
+		return nil
+	}
+	if msg.Usage == nil || (msg.Usage.ContextUsedTokens == 0 && msg.Usage.ContextSizeTokens == 0) {
+		return nil
+	}
+	return &agentrun.Message{
+		Type: agentrun.MessageContextWindow,
+		Usage: &agentrun.Usage{
+			ContextUsedTokens: msg.Usage.ContextUsedTokens,
+			ContextSizeTokens: msg.Usage.ContextSizeTokens,
+		},
+		Timestamp: msg.Timestamp,
 	}
 }
 
