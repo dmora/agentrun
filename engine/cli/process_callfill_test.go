@@ -363,6 +363,38 @@ func TestApplyContextFill_MidTurnThinking(t *testing.T) {
 	}
 }
 
+func TestApplyContextFill_SubagentEventsExcluded(t *testing.T) {
+	// Simulates a turn where the parent emits assistant messages interleaved
+	// with subagent events. After the parser fix (isSubagentEvent), subagent
+	// events have nil Usage. Verify that only the parent's fill is tracked.
+	msgs := runScanLines(t, []agentrun.Message{
+		// Parent assistant (fill = 3 + 0 + 26589 = 26592)
+		{Type: agentrun.MessageThinking, Usage: &agentrun.Usage{InputTokens: 3, CacheWriteTokens: 26589}},
+		// Parent assistant with tool call (same API call, same fill)
+		{Type: agentrun.MessageText, Usage: &agentrun.Usage{InputTokens: 3, CacheWriteTokens: 26589}},
+		// Subagent assistant — Usage nil'd out by parser (was 46740 fill)
+		{Type: agentrun.MessageText, Usage: nil},
+		// Subagent user (tool result) — no usage
+		{Type: agentrun.MessageToolResult},
+		// Result
+		{Type: agentrun.MessageResult, Usage: &agentrun.Usage{InputTokens: 3, OutputTokens: 193, CacheWriteTokens: 26589}},
+	})
+	result := findResult(msgs)
+	if result == nil {
+		t.Fatal("no MessageResult found")
+	}
+	// Result must reflect the parent's fill (26592), not the subagent's (46740).
+	wantParentFill := 3 + 26589
+	if result.Usage.ContextUsedTokens != wantParentFill {
+		t.Errorf("result ContextUsedTokens = %d, want %d (parent fill, subagent excluded)",
+			result.Usage.ContextUsedTokens, wantParentFill)
+	}
+	// Mid-turn parent messages should have correct per-call fill.
+	if msgs[0].Usage.ContextUsedTokens != wantParentFill {
+		t.Errorf("msg[0] thinking ContextUsedTokens = %d, want %d", msgs[0].Usage.ContextUsedTokens, wantParentFill)
+	}
+}
+
 func TestApplyContextFill_MidTurnZeroFill(t *testing.T) {
 	// Mid-turn message with Usage where all input-side fields are zero.
 	// Computed fill is 0, so ContextUsedTokens stays 0 (== 0 guard is a no-op

@@ -59,6 +59,14 @@ func (b *Backend) ParseLine(line string) (agentrun.Message, error) {
 		msg.Type = sanitizeUnknownType(typeStr)
 	}
 
+	// Subagent events (parent_tool_use_id != null) carry the subagent's
+	// context window usage, not the parent's. Exclude their Usage to
+	// prevent inflation of the parent's context fill tracking.
+	// Raw JSON is preserved for consumers who need per-subagent usage.
+	if isSubagentEvent(raw) {
+		msg.Usage = nil
+	}
+
 	return msg, nil
 }
 
@@ -328,6 +336,15 @@ func extractTokenUsage(source map[string]any) *agentrun.Usage {
 		return nil
 	}
 	return u
+}
+
+// isSubagentEvent returns true when the raw JSONL event has a non-null
+// parent_tool_use_id, indicating it originated from a subagent (e.g., the
+// Agent tool) rather than the parent session. Parent events have null or
+// missing parent_tool_use_id.
+func isSubagentEvent(raw map[string]any) bool {
+	v, ok := raw["parent_tool_use_id"]
+	return ok && v != nil
 }
 
 // sanitizeUnknownType converts an unknown type string to a MessageType.

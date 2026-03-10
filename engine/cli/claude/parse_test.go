@@ -1128,6 +1128,8 @@ func FuzzParseLine(f *testing.F) {
 		`{"type":"result","result":"done","permission_denials":[{"tool":"Bash","reason":"denied"}]}`,
 		`{"type":"result","result":"done","permission_denials":[]}`,
 		`{"type":"result","result":"done","permission_denials":"not_an_array"}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":3,"cache_creation_input_tokens":46740}},"parent_tool_use_id":"toolu_abc"}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":3}},"parent_tool_use_id":null}`,
 	}
 	for _, s := range seeds {
 		f.Add(s)
@@ -1145,6 +1147,95 @@ func FuzzParseLine(f *testing.F) {
 			t.Error("Raw should be populated on successful parse")
 		}
 	})
+}
+
+// --- Subagent event filtering ---
+
+func TestParseLine_SubagentAssistantUsageNilledOut(t *testing.T) {
+	b := New()
+	// Subagent assistant event: parent_tool_use_id is non-null.
+	line := `{"type":"assistant","message":{"content":[{"type":"text","text":"found 16 files"}],"usage":{"input_tokens":3,"cache_creation_input_tokens":46740,"cache_read_input_tokens":0,"output_tokens":1}},"parent_tool_use_id":"toolu_01DJL8rha9gHNyzuypa5xPnW","session_id":"abc"}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Type != agentrun.MessageText {
+		t.Errorf("type = %q, want %q", msg.Type, agentrun.MessageText)
+	}
+	if msg.Content != "found 16 files" {
+		t.Errorf("content = %q, want %q", msg.Content, "found 16 files")
+	}
+	// Usage must be nil — subagent usage should not inflate parent context fill.
+	if msg.Usage != nil {
+		t.Errorf("subagent Usage should be nil, got %+v", msg.Usage)
+	}
+	// Raw JSON preserved for consumers who need per-subagent usage.
+	assertRawPopulated(t, msg)
+}
+
+func TestParseLine_ParentAssistantUsagePreserved(t *testing.T) {
+	b := New()
+	// Parent assistant event: parent_tool_use_id is null.
+	line := `{"type":"assistant","message":{"content":[{"type":"text","text":"hello"}],"usage":{"input_tokens":100,"output_tokens":50}},"parent_tool_use_id":null,"session_id":"abc"}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Usage == nil {
+		t.Fatal("parent Usage should be preserved")
+	}
+	if msg.Usage.InputTokens != 100 {
+		t.Errorf("input_tokens = %d, want 100", msg.Usage.InputTokens)
+	}
+}
+
+func TestParseLine_MissingParentToolUseIDUsagePreserved(t *testing.T) {
+	b := New()
+	// No parent_tool_use_id field at all (older CLI versions).
+	line := `{"type":"assistant","message":{"content":[{"type":"text","text":"hello"}],"usage":{"input_tokens":100,"output_tokens":50}}}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Usage == nil {
+		t.Fatal("Usage should be preserved when parent_tool_use_id is absent")
+	}
+}
+
+func TestParseLine_SubagentResultUsageNilledOut(t *testing.T) {
+	b := New()
+	// Subagent result event — unlikely in practice but defensive.
+	line := `{"type":"result","result":"done","usage":{"input_tokens":500,"output_tokens":200},"parent_tool_use_id":"toolu_abc"}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Type != agentrun.MessageResult {
+		t.Errorf("type = %q, want %q", msg.Type, agentrun.MessageResult)
+	}
+	if msg.Usage != nil {
+		t.Errorf("subagent result Usage should be nil, got %+v", msg.Usage)
+	}
+}
+
+func TestIsSubagentEvent(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  map[string]any
+		want bool
+	}{
+		{"null parent_tool_use_id", map[string]any{"parent_tool_use_id": nil}, false},
+		{"non-null parent_tool_use_id", map[string]any{"parent_tool_use_id": "toolu_abc"}, true},
+		{"missing parent_tool_use_id", map[string]any{}, false},
+		{"empty string parent_tool_use_id", map[string]any{"parent_tool_use_id": ""}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isSubagentEvent(tt.raw); got != tt.want {
+				t.Errorf("isSubagentEvent = %v, want %v", got, tt.want)
+			}
+		})
+	}
 }
 
 // --- Helpers ---
