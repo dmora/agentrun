@@ -243,14 +243,21 @@ func TestCollectTerminalState_NoError(t *testing.T) {
 	ch := make(chan agentrun.Message)
 	close(ch)
 	proc := &fakeProcess{output: ch}
-	msgs := []agentrun.Message{{Type: agentrun.MessageText, Content: "hi"}}
+	var summary agentrun.TurnSummary
+	summary.Add(agentrun.Message{Type: agentrun.MessageText, Content: "hi"})
 	stderrW := &cappedWriter{max: 1024}
-	out := collectTerminalState(proc, msgs, time.Now(), stderrW)
+	out := collectTerminalState(proc, &summary, time.Now(), stderrW)
 	if out.Error != "" {
 		t.Errorf("expected no error, got %q", out.Error)
 	}
 	if len(out.Messages) != 1 {
 		t.Errorf("expected 1 message, got %d", len(out.Messages))
+	}
+	if out.Summary == nil {
+		t.Fatal("expected summary to be populated")
+	}
+	if len(out.Summary.TextBlocks) != 1 || out.Summary.TextBlocks[0] != "hi" {
+		t.Errorf("Summary.TextBlocks = %v, want [hi]", out.Summary.TextBlocks)
 	}
 }
 
