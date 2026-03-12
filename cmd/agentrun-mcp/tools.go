@@ -257,6 +257,37 @@ func mustJSON(v any) json.RawMessage {
 	return b
 }
 
+// --- TurnSummary output ---
+
+// turnSummaryJSON is the JSON-serializable projection of agentrun.TurnSummary.
+// It surfaces pre-extracted turn data so MCP tool callers don't need to iterate
+// the raw Messages array.
+type turnSummaryJSON struct {
+	TextBlocks     []string                    `json:"text_blocks,omitempty"`
+	ThinkingBlocks []string                    `json:"thinking_blocks,omitempty"`
+	ToolCalls      []agentrun.ToolCall         `json:"tool_calls,omitempty"`
+	StopReason     agentrun.StopReason         `json:"stop_reason,omitempty"`
+	IsError        bool                        `json:"is_error,omitempty"`
+	Errors         []string                    `json:"errors,omitempty"`
+	Denials        []agentrun.PermissionDenial `json:"denials,omitempty"`
+	Usage          *agentrun.Usage             `json:"usage,omitempty"`
+	Result         bool                        `json:"result"`
+}
+
+func toSummaryJSON(s *agentrun.TurnSummary) *turnSummaryJSON {
+	return &turnSummaryJSON{
+		TextBlocks:     s.TextBlocks,
+		ThinkingBlocks: s.ThinkingBlocks,
+		ToolCalls:      s.ToolCalls,
+		StopReason:     s.StopReason,
+		IsError:        s.IsError,
+		Errors:         s.Errors,
+		Denials:        s.Denials,
+		Usage:          s.Usage,
+		Result:         s.Result,
+	}
+}
+
 // --- Tool 5: run_turn ---
 
 type runTurnInput struct {
@@ -271,6 +302,7 @@ type runTurnInput struct {
 
 type runTurnOutput struct {
 	Messages []agentrun.Message `json:"messages"`
+	Summary  *turnSummaryJSON   `json:"summary,omitempty"`
 	ExitCode *int               `json:"exit_code,omitempty"`
 	Stderr   string             `json:"stderr,omitempty"`
 	Duration string             `json:"duration"`
@@ -324,9 +356,10 @@ func buildRunSession(input runTurnInput) (agentrun.Session, error) {
 	}, nil
 }
 
-func collectTerminalState(proc agentrun.Process, messages []agentrun.Message, start time.Time, stderrW *cappedWriter) *runTurnOutput {
+func collectTerminalState(proc agentrun.Process, summary *agentrun.TurnSummary, start time.Time, stderrW *cappedWriter) *runTurnOutput {
 	out := &runTurnOutput{
-		Messages: messages,
+		Messages: summary.Messages,
+		Summary:  toSummaryJSON(summary),
 		Duration: time.Since(start).Round(time.Millisecond).String(),
 		Stderr:   scrubStderr(stderrW.Bytes(), 2048),
 	}
@@ -364,9 +397,9 @@ func doRunTurn(ctx context.Context, input runTurnInput) (*runTurnOutput, error) 
 	}
 	defer stopProcess(proc)
 
-	var messages []agentrun.Message
+	var summary agentrun.TurnSummary
 	handler := func(msg agentrun.Message) error {
-		messages = append(messages, msg)
+		summary.Add(msg)
 		return nil
 	}
 
@@ -375,14 +408,14 @@ func doRunTurn(ctx context.Context, input runTurnInput) (*runTurnOutput, error) 
 		log.Warn("RunTurn error", "error", turnErr)
 	}
 
-	out := collectTerminalState(proc, messages, start, stderrW)
+	out := collectTerminalState(proc, &summary, start, stderrW)
 	if turnErr != nil && out.Error == "" {
 		out.Error = turnErr.Error()
 	}
 	if out.Error != "" {
 		log.Warn("process error", "error", out.Error)
 	}
-	log.Info("run_turn complete", "messages", len(messages), "duration", out.Duration)
+	log.Info("run_turn complete", "messages", len(summary.Messages), "duration", out.Duration)
 	return out, nil
 }
 
@@ -401,6 +434,7 @@ type sessionStartInput struct {
 type sessionStartOutput struct {
 	SessionID string             `json:"session_id"`
 	Messages  []agentrun.Message `json:"messages"`
+	Summary   *turnSummaryJSON   `json:"summary,omitempty"`
 	Duration  string             `json:"duration"`
 	Stderr    string             `json:"stderr,omitempty"`
 	Error     string             `json:"error,omitempty"`
@@ -450,9 +484,9 @@ func doSessionStart(ctx context.Context, input sessionStartInput) (*sessionStart
 		return nil, fmt.Errorf("start: %w", err)
 	}
 
-	var messages []agentrun.Message
+	var summary agentrun.TurnSummary
 	handler := func(msg agentrun.Message) error {
-		messages = append(messages, msg)
+		summary.Add(msg)
 		return nil
 	}
 	turnErr := agentrun.RunTurn(ctx, proc, input.Prompt, handler)
@@ -465,8 +499,8 @@ func doSessionStart(ctx context.Context, input sessionStartInput) (*sessionStart
 	if proc.Err() != nil {
 		stopProcess(proc)
 		out := &sessionStartOutput{
-			Messages: messages, Duration: duration,
-			Stderr: stderr, Error: proc.Err().Error(),
+			Messages: summary.Messages, Summary: toSummaryJSON(&summary),
+			Duration: duration, Stderr: stderr, Error: proc.Err().Error(),
 		}
 		if turnErr != nil && out.Error == "" {
 			out.Error = turnErr.Error()
@@ -481,8 +515,8 @@ func doSessionStart(ctx context.Context, input sessionStartInput) (*sessionStart
 	}
 	log.Info("session created", "session", maskID(sessionID), "duration", duration)
 	out := &sessionStartOutput{
-		SessionID: sessionID, Messages: messages,
-		Duration: duration, Stderr: stderr,
+		SessionID: sessionID, Messages: summary.Messages,
+		Summary: toSummaryJSON(&summary), Duration: duration, Stderr: stderr,
 	}
 	if turnErr != nil {
 		out.Error = turnErr.Error()
@@ -522,6 +556,7 @@ type sessionSendInput struct {
 
 type sessionSendOutput struct {
 	Messages []agentrun.Message `json:"messages"`
+	Summary  *turnSummaryJSON   `json:"summary,omitempty"`
 	Duration string             `json:"duration"`
 	Stderr   string             `json:"stderr,omitempty"`
 	Error    string             `json:"error,omitempty"`
@@ -569,9 +604,9 @@ func doSessionSend(ctx context.Context, input sessionSendInput) (*sessionSendOut
 	entry.lastActivity = time.Now()
 	entry.stderrW.Reset()
 
-	var messages []agentrun.Message
+	var summary agentrun.TurnSummary
 	handler := func(msg agentrun.Message) error {
-		messages = append(messages, msg)
+		summary.Add(msg)
 		return nil
 	}
 
@@ -581,7 +616,8 @@ func doSessionSend(ctx context.Context, input sessionSendInput) (*sessionSendOut
 	entry.lastActivity = time.Now()
 
 	out := &sessionSendOutput{
-		Messages: messages,
+		Messages: summary.Messages,
+		Summary:  toSummaryJSON(&summary),
 		Duration: time.Since(start).Round(time.Millisecond).String(),
 		Stderr:   stderr,
 	}
@@ -600,7 +636,7 @@ func doSessionSend(ctx context.Context, input sessionSendInput) (*sessionSendOut
 		log.Info("session auto-removed (process error)", "error", entry.proc.Err())
 	}
 
-	log.Info("send complete", "messages", len(messages), "duration", out.Duration)
+	log.Info("send complete", "messages", len(summary.Messages), "duration", out.Duration)
 	return out, nil
 }
 
