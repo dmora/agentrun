@@ -278,6 +278,45 @@ func TestTurnSummaryAdd(t *testing.T) {
 			},
 		},
 		{
+			name: "tool result message",
+			msgs: []Message{
+				{Type: MessageToolResult, Tool: &ToolCall{Name: testToolRead, Output: json.RawMessage(`"file contents"`)}},
+				{Type: MessageResult, StopReason: StopEndTurn},
+			},
+			check: func(t *testing.T, s *TurnSummary) {
+				if len(s.ToolCalls) != 1 {
+					t.Fatalf("ToolCalls count = %d, want 1", len(s.ToolCalls))
+				}
+				if s.ToolCalls[0].Name != testToolRead {
+					t.Errorf("ToolCalls[0].Name = %q, want %q", s.ToolCalls[0].Name, testToolRead)
+				}
+				if string(s.ToolCalls[0].Output) != `"file contents"` {
+					t.Errorf("ToolCalls[0].Output = %s, want %q", s.ToolCalls[0].Output, `"file contents"`)
+				}
+			},
+		},
+		{
+			name: "tool use followed by tool result",
+			msgs: []Message{
+				{Type: MessageToolUse, Tool: &ToolCall{Name: testToolRead, Input: json.RawMessage(`{"path":"foo.go"}`)}},
+				{Type: MessageToolResult, Tool: &ToolCall{Name: testToolRead, Output: json.RawMessage(`"contents"`)}},
+				{Type: MessageResult, StopReason: StopEndTurn},
+			},
+			check: func(t *testing.T, s *TurnSummary) {
+				// Both are captured as separate entries — TurnSummary is a
+				// flat accumulator, not a tool call correlator.
+				if len(s.ToolCalls) != 2 {
+					t.Fatalf("ToolCalls count = %d, want 2", len(s.ToolCalls))
+				}
+				if s.ToolCalls[0].Name != testToolRead {
+					t.Errorf("ToolCalls[0].Name = %q, want %q", s.ToolCalls[0].Name, testToolRead)
+				}
+				if s.ToolCalls[1].Name != testToolRead {
+					t.Errorf("ToolCalls[1].Name = %q, want %q", s.ToolCalls[1].Name, testToolRead)
+				}
+			},
+		},
+		{
 			name: "mixed tool sources no duplicates",
 			msgs: []Message{
 				{Type: MessageText, Content: "text", Tool: &ToolCall{Name: testToolRead}},

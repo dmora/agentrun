@@ -57,8 +57,9 @@ func (s *TurnSummary) Add(msg Message) {
 		return
 	}
 
-	// Capture tool calls from any message type — Claude CLI attaches
-	// Tool to MessageText/MessageThinking instead of emitting MessageToolUse.
+	// Capture tool calls from any message type. This handles explicit
+	// MessageToolUse as well as tool calls embedded in content messages
+	// (e.g., Claude CLI attaches Tool to MessageText/MessageThinking).
 	if msg.Tool != nil {
 		s.ToolCalls = append(s.ToolCalls, *msg.Tool)
 	}
@@ -76,5 +77,7 @@ func (s *TurnSummary) Add(msg Message) {
 		s.Denials = msg.Denials
 		s.IsError = msg.IsError
 		s.Result = true
+	case MessageToolUse, MessageToolResult:
+		// Tool field handled above; no additional fields to accumulate.
 	}
 }
