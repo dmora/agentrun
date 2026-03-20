@@ -899,7 +899,6 @@ func TestSpawnArgs_Effort(t *testing.T) {
 		{"low", "low", "model_reasoning_effort=low"},
 		{"medium", "medium", "model_reasoning_effort=medium"},
 		{"high", "high", "model_reasoning_effort=high"},
-		{"max_to_xhigh", "max", "model_reasoning_effort=xhigh"},
 	}
 
 	b := New()

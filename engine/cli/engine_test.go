@@ -1707,6 +1707,26 @@ func TestStart_InvalidEffort(t *testing.T) {
 	}
 }
 
+func TestStart_EffortMaxRejected(t *testing.T) {
+	b := withResumer(testBackend{
+		spawnFn: func(_ agentrun.Session) (string, []string) {
+			return binEcho, []string{"x"}
+		},
+		parseFn: textParser,
+	})
+	eng := cli.NewEngine(b)
+	_, err := eng.Start(testCtx(t), agentrun.Session{
+		CWD:     tempDir(t),
+		Options: map[string]string{agentrun.OptionEffort: "max"},
+	})
+	if err == nil {
+		t.Fatal("expected error for effort 'max'")
+	}
+	if !strings.Contains(err.Error(), "unknown effort") {
+		t.Errorf("error = %v, want to contain 'unknown effort'", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Concurrency tests
 // ---------------------------------------------------------------------------

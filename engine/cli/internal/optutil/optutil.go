@@ -32,7 +32,7 @@ func ValidateModeHITL(prefix string, opts map[string]string) error {
 // The prefix is used in error messages (e.g., "claude", "codex").
 func ValidateEffort(prefix string, opts map[string]string) error {
 	if e := agentrun.Effort(opts[agentrun.OptionEffort]); e != "" && !e.Valid() {
-		return fmt.Errorf("%s: unknown effort %q: valid: low, medium, high, max", prefix, e)
+		return fmt.Errorf("%s: unknown effort %q: valid: low, medium, high", prefix, e)
 	}
 	return nil
 }

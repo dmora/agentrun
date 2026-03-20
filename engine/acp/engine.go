@@ -73,7 +73,7 @@ func (e *Engine) Start(ctx context.Context, session agentrun.Session, opts ...ag
 
 	// Validate cross-cutting options.
 	if e := agentrun.Effort(session.Options[agentrun.OptionEffort]); e != "" && !e.Valid() {
-		return nil, fmt.Errorf("acp: unknown effort %q: valid: low, medium, high, max", e)
+		return nil, fmt.Errorf("acp: unknown effort %q: valid: low, medium, high", e)
 	}
 
 	// Validate CWD.

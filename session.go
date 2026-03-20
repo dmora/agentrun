@@ -60,11 +60,11 @@ const (
 	OptionAgentID = "agent_id"
 
 	// OptionEffort controls reasoning depth/quality tradeoff.
-	// Value should be an Effort constant (low, medium, high, max).
+	// Value should be an Effort constant (low, medium, high).
 	// Backend support varies — unsupported values are silently skipped:
 	//   - Claude CLI: low, medium, high (maps to --effort)
-	//   - Codex CLI: low, medium, high, max (maps to -c model_reasoning_effort; max → "xhigh")
-	//   - OpenCode: low, high, max (maps to --variant; medium has no equivalent)
+	//   - Codex CLI: low, medium, high (maps to -c model_reasoning_effort)
+	//   - OpenCode: low, high (maps to --variant; medium has no equivalent)
 	//
 	// When set and mappable to the backend's native values, OptionEffort
 	// takes precedence over backend-specific effort options (e.g.,
@@ -79,6 +79,13 @@ const (
 	// Backend support: Claude (--add-dir), Codex (--add-dir).
 	// Backends without directory scoping silently ignore this option.
 	OptionAddDirs = "add_dirs"
+
+	// OptionSessionName sets a human-readable name for the session.
+	// Backend support: Claude CLI (--name), OpenCode (--title).
+	// Backends without session naming silently ignore this option.
+	// When set, takes precedence over backend-specific naming options
+	// (e.g., opencode.OptionTitle).
+	OptionSessionName = "session_name"
 )
 
 // Mode represents the operating mode for a session.
@@ -125,14 +132,11 @@ const (
 
 	// EffortHigh requests thorough reasoning for complex tasks.
 	EffortHigh Effort = "high"
-
-	// EffortMax requests maximum reasoning depth.
-	EffortMax Effort = "max"
 )
 
 // Valid reports whether e is a recognized Effort value.
 func (e Effort) Valid() bool {
-	return e == EffortLow || e == EffortMedium || e == EffortHigh || e == EffortMax
+	return e == EffortLow || e == EffortMedium || e == EffortHigh
 }
 
 // Session is the minimal session state passed to engines.

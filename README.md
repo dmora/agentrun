@@ -194,7 +194,7 @@ session := agentrun.Session{
     Options: map[string]string{
         agentrun.OptionSystemPrompt:   "You are a Go expert.",
         agentrun.OptionMode:           "act",                    // plan or act
-        agentrun.OptionEffort:         "high",                   // low/medium/high/max
+        agentrun.OptionEffort:         "high",                   // low/medium/high
         agentrun.OptionThinkingBudget: "10000",                  // enable extended thinking
         agentrun.OptionHITL:           "off",                    // human-in-the-loop
         agentrun.OptionAddDirs:        "/shared/lib\n/shared/proto", // newline-separated
