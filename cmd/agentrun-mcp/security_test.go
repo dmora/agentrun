@@ -185,6 +185,7 @@ func TestOptionsAllowlist_Allows(t *testing.T) {
 		"max_turns":       "5",
 		"thinking_budget": "10000",
 		"effort":          "high",
+		"session_name":    "my-session",
 	}
 	if err := validateOptions(opts); err != nil {
 		t.Fatalf("expected nil, got %v", err)

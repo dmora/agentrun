@@ -101,6 +101,7 @@ var allowedOptions = map[string]bool{
 	agentrun.OptionEffort:         true,
 	agentrun.OptionAgentID:        true,
 	agentrun.OptionAddDirs:        true,
+	agentrun.OptionSessionName:    true,
 }
 
 // validateOptions rejects any option key not in the allowlist.

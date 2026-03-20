@@ -47,6 +47,7 @@
 //
 //   - [agentrun.OptionMode] — sets session intent ("plan" or "act")
 //   - [agentrun.OptionHITL] — controls human-in-the-loop ("on" or "off")
+//   - [agentrun.OptionSessionName] — sets --name (human-readable session name)
 //
 // When OptionMode or OptionHITL are set, they map to --permission-mode:
 //
@@ -67,4 +68,6 @@
 // Claude-specific options:
 //
 //   - [OptionPermissionMode] — sets --permission-mode (use [PermissionMode] values)
+//   - [OptionAllowedTools] — sets --allowedTools (newline-separated tool names)
+//   - [OptionRemoteControl] — sets --remote-control (truthy boolean enables MCP remote control)
 package claude

@@ -1184,7 +1184,7 @@ func TestSpawnArgs_Effort(t *testing.T) {
 		{"low", "low", []string{"--effort", "low"}, nil},
 		{"medium", "medium", []string{"--effort", "medium"}, nil},
 		{"high", "high", []string{"--effort", "high"}, nil},
-		{"max_skipped", "max", nil, []string{"--effort"}},
+		{"max_invalid", "max", nil, []string{"--effort"}},
 		{"empty", "", nil, []string{"--effort"}},
 		{"invalid", "xhigh", nil, []string{"--effort"}},
 	}
@@ -1214,7 +1214,7 @@ func TestResumeArgs_Effort(t *testing.T) {
 		{"low", "low", []string{"--effort", "low"}, nil, false},
 		{"medium", "medium", []string{"--effort", "medium"}, nil, false},
 		{"high", "high", []string{"--effort", "high"}, nil, false},
-		{"max_skipped", "max", nil, []string{"--effort"}, false},
+		{"max_invalid", "max", nil, nil, true},
 		{"invalid", "xhigh", nil, nil, true},
 	}
 
@@ -1483,6 +1483,131 @@ func TestSpawnArgs_AllowedToolsPrecedence(t *testing.T) {
 			_, args := b.SpawnArgs(session)
 			assertArgs(t, args, tt.contains, tt.excludes, testPrompt, false)
 		})
+	}
+}
+
+// --- SessionName option tests ---
+
+func TestSpawnArgs_SessionName(t *testing.T) {
+	tests := []struct {
+		name     string
+		sessName string
+		contains []string
+		excludes []string
+	}{
+		{"valid", "my-session", []string{"--name", "my-session"}, nil},
+		{"null_byte_skipped", "bad\x00name", nil, []string{"--name"}},
+		{"leading_dash_skipped", "-evil", nil, []string{"--name"}},
+		{"empty_skipped", "", nil, []string{"--name"}},
+	}
+
+	b := New()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			session := agentrun.Session{
+				Prompt:  testPrompt,
+				Options: map[string]string{agentrun.OptionSessionName: tt.sessName},
+			}
+			_, args := b.SpawnArgs(session)
+			assertArgs(t, args, tt.contains, tt.excludes, testPrompt, false)
+		})
+	}
+}
+
+func TestStreamArgs_SessionName(t *testing.T) {
+	b := New()
+	session := agentrun.Session{
+		Options: map[string]string{agentrun.OptionSessionName: "stream-session"},
+	}
+	_, args := b.StreamArgs(session)
+	assertArgs(t, args, []string{"--name", "stream-session"}, nil, "", false)
+}
+
+func TestResumeArgs_SessionName(t *testing.T) {
+	b := New()
+	session := agentrun.Session{
+		Options: map[string]string{
+			agentrun.OptionResumeID:    testResumeID,
+			agentrun.OptionSessionName: "resume-session",
+		},
+	}
+	_, args, err := b.ResumeArgs(session, testPrompt)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertArgs(t, args, []string{"--name", "resume-session"}, nil, testPrompt, false)
+}
+
+// --- RemoteControl option tests ---
+
+func TestSpawnArgs_RemoteControl(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    string
+		contains []string
+		excludes []string
+	}{
+		{"true", "true", []string{"--remote-control"}, nil},
+		{"one", "1", []string{"--remote-control"}, nil},
+		{"on", "on", []string{"--remote-control"}, nil},
+		{"yes", "yes", []string{"--remote-control"}, nil},
+		{"false", "false", nil, []string{"--remote-control"}},
+		{"zero", "0", nil, []string{"--remote-control"}},
+		{"empty", "", nil, []string{"--remote-control"}},
+		{"invalid", "maybe", nil, []string{"--remote-control"}},
+	}
+
+	b := New()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			session := agentrun.Session{
+				Prompt:  testPrompt,
+				Options: map[string]string{OptionRemoteControl: tt.value},
+			}
+			_, args := b.SpawnArgs(session)
+			assertArgs(t, args, tt.contains, tt.excludes, testPrompt, false)
+		})
+	}
+}
+
+func TestStreamArgs_RemoteControl(t *testing.T) {
+	b := New()
+	session := agentrun.Session{
+		Options: map[string]string{OptionRemoteControl: "true"},
+	}
+	_, args := b.StreamArgs(session)
+	assertArgs(t, args, []string{"--remote-control"}, nil, "", false)
+}
+
+func TestResumeArgs_RemoteControl(t *testing.T) {
+	b := New()
+	session := agentrun.Session{
+		Options: map[string]string{
+			agentrun.OptionResumeID: testResumeID,
+			OptionRemoteControl:     "true",
+		},
+	}
+	_, args, err := b.ResumeArgs(session, testPrompt)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertArgs(t, args, []string{"--remote-control"}, nil, testPrompt, false)
+}
+
+func TestResumeArgs_RemoteControl_Invalid(t *testing.T) {
+	b := New()
+	session := agentrun.Session{
+		Options: map[string]string{
+			agentrun.OptionResumeID: testResumeID,
+			OptionRemoteControl:     "maybe",
+		},
+	}
+	_, _, err := b.ResumeArgs(session, testPrompt)
+	if err == nil {
+		t.Fatal("expected error for invalid remote_control value")
+	}
+	if !strings.Contains(err.Error(), "invalid remote_control") {
+		t.Errorf("error = %v, want to contain 'invalid remote_control'", err)
 	}
 }
 

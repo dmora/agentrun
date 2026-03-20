@@ -112,8 +112,8 @@ func (b *Backend) SpawnArgs(session agentrun.Session) (string, []string) {
 		args = append(args, "--agent", id)
 	}
 
-	if t := session.Options[OptionTitle]; t != "" && !jsonutil.ContainsNull(t) && len(t) <= maxTitleLen {
-		args = append(args, "--title", t)
+	if title := resolveTitle(session.Options); title != "" {
+		args = append(args, "--title", title)
 	}
 
 	// Prompt is always the last positional argument.
@@ -181,7 +181,6 @@ func baseArgs() []string {
 var effortToVariant = map[agentrun.Effort]Variant{
 	agentrun.EffortLow:  VariantLow,
 	agentrun.EffortHigh: VariantHigh,
-	agentrun.EffortMax:  VariantMax,
 }
 
 // resolveVariant returns the --variant value from root OptionEffort
@@ -197,6 +196,21 @@ func resolveVariant(opts map[string]string) string {
 	}
 	// Fall back to backend-specific OptionVariant.
 	if v := opts[OptionVariant]; v != "" && !jsonutil.ContainsNull(v) {
+		return v
+	}
+	return ""
+}
+
+// resolveTitle returns the --title value from root OptionSessionName
+// (precedence) or backend-specific OptionTitle.
+// Returns empty string when no title should be emitted.
+func resolveTitle(opts map[string]string) string {
+	// Root OptionSessionName takes precedence.
+	if v := opts[agentrun.OptionSessionName]; v != "" && !jsonutil.ContainsNull(v) && len(v) <= maxTitleLen {
+		return v
+	}
+	// Fall back to backend-specific OptionTitle.
+	if v := opts[OptionTitle]; v != "" && !jsonutil.ContainsNull(v) && len(v) <= maxTitleLen {
 		return v
 	}
 	return ""

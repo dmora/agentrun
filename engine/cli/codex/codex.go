@@ -211,12 +211,10 @@ func buildResumeCommand(threadID string, session agentrun.Session) []string {
 }
 
 // codexEffort maps root Effort values to Codex model_reasoning_effort values.
-// max → "xhigh" is a Codex-specific mapping.
 var codexEffort = map[agentrun.Effort]string{
 	agentrun.EffortLow:    "low",
 	agentrun.EffortMedium: "medium",
 	agentrun.EffortHigh:   "high",
-	agentrun.EffortMax:    "xhigh",
 }
 
 // appendCommonArgs appends flags available on both exec and exec resume.
@@ -233,7 +231,7 @@ func appendCommonArgs(args []string, session agentrun.Session) []string {
 		args = append(args, "--skip-git-repo-check")
 	}
 
-	// Effort: Codex supports low, medium, high, max (max → "xhigh").
+	// Effort: Codex supports low, medium, high.
 	if e := agentrun.Effort(session.Options[agentrun.OptionEffort]); e != "" {
 		if v, ok := codexEffort[e]; ok {
 			args = append(args, "-c", "model_reasoning_effort="+v)

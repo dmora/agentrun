@@ -335,13 +335,13 @@ func TestSessionOptions_ResumeID_RoundTrip(t *testing.T) {
 }
 
 func TestEffortValid(t *testing.T) {
-	valid := []Effort{EffortLow, EffortMedium, EffortHigh, EffortMax}
+	valid := []Effort{EffortLow, EffortMedium, EffortHigh}
 	for _, e := range valid {
 		if !e.Valid() {
 			t.Errorf("Effort(%q).Valid() = false, want true", e)
 		}
 	}
-	invalid := []Effort{"", "invalid", "LOW", "Medium", "xhigh"}
+	invalid := []Effort{"", "invalid", "LOW", "Medium", "xhigh", "max"}
 	for _, e := range invalid {
 		if e.Valid() {
 			t.Errorf("Effort(%q).Valid() = true, want false", e)

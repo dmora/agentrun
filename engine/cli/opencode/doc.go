@@ -24,6 +24,9 @@
 //   - OptionAgentID → --agent <id>
 //   - OptionThinkingBudget → --thinking (boolean: any non-empty value)
 //
+// Cross-cutting (root package — session controls):
+//   - OptionSessionName → --title (takes precedence over OptionTitle)
+//
 // Cross-cutting (root package — session resume):
 //   - OptionResumeID → --session (auto-captured or explicit cold resume)
 //     Consumers capture the session ID from MessageInit.ResumeID.
@@ -31,7 +34,7 @@
 // Backend-specific (namespaced with "opencode." prefix):
 //   - OptionVariant → --variant (VariantHigh, VariantMax, VariantMinimal, VariantLow)
 //   - OptionFork → --fork (fork session on resume)
-//   - OptionTitle → --title (session title, max 512 bytes)
+//   - OptionTitle → --title (session title, max 512 bytes; overridden by root OptionSessionName)
 //
 // # Event types
 //

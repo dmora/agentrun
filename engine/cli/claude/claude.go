@@ -34,6 +34,12 @@ const (
 	// of which mode is active. The CLI decides enforcement semantics.
 	// Backend-specific: only Claude CLI supports --allowedTools.
 	OptionAllowedTools = "claude.allowed_tools"
+
+	// OptionRemoteControl enables Claude Code's MCP remote control mode.
+	// When set to a truthy value ("true", "1", "on", "yes"), adds
+	// --remote-control to the CLI arguments.
+	// Backend-specific: only Claude CLI supports --remote-control.
+	OptionRemoteControl = "claude.remote_control"
 )
 
 // validResumeID matches safe Claude session identifiers.
@@ -250,13 +256,23 @@ func appendSessionArgs(args []string, session agentrun.Session) []string {
 	args = appendPositiveInt(args, session.Options, agentrun.OptionMaxTurns, "--max-turns")
 	args = appendPositiveInt(args, session.Options, agentrun.OptionThinkingBudget, "--max-thinking-tokens")
 
-	// Effort: Claude CLI supports low, medium, high (max has no equivalent).
-	if e := agentrun.Effort(session.Options[agentrun.OptionEffort]); e.Valid() && e != agentrun.EffortMax {
+	// Effort: Claude CLI supports low, medium, high.
+	if e := agentrun.Effort(session.Options[agentrun.OptionEffort]); e.Valid() {
 		args = append(args, "--effort", string(e))
 	}
 
 	// Additional directories.
 	args = optutil.AppendAddDirs(args, session.Options, "--add-dir")
+
+	// Session name.
+	if name := session.Options[agentrun.OptionSessionName]; name != "" && !jsonutil.ContainsNull(name) && !strings.HasPrefix(name, "-") {
+		args = append(args, "--name", name)
+	}
+
+	// Remote control.
+	if rc, ok, _ := agentrun.ParseBoolOption(session.Options, OptionRemoteControl); ok && rc {
+		args = append(args, "--remote-control")
+	}
 
 	// Allowed tools — orthogonal to permission mode (always appended when set).
 	for _, tool := range agentrun.ParseListOption(session.Options, OptionAllowedTools) {
@@ -329,6 +345,9 @@ func validateSessionOptions(opts map[string]string) error {
 	}
 	if err := validatePositiveIntOption(opts, agentrun.OptionThinkingBudget, "thinking budget"); err != nil {
 		return err
+	}
+	if _, _, err := agentrun.ParseBoolOption(opts, OptionRemoteControl); err != nil {
+		return fmt.Errorf("claude: invalid remote_control: %w", err)
 	}
 	return optutil.ValidateEffort("claude", opts)
 }

@@ -500,7 +500,6 @@ func TestSpawnArgs_Effort(t *testing.T) {
 	}{
 		{"low", "low", "low"},
 		{"high", "high", "high"},
-		{"max", "max", "max"},
 		{"medium_no_equivalent", "medium", ""},
 		{"invalid", "xhigh", ""},
 		{"empty", "", ""},
@@ -563,7 +562,6 @@ func TestResumeArgs_Effort(t *testing.T) {
 	}{
 		{"low", "low", "low"},
 		{"high", "high", "high"},
-		{"max", "max", "max"},
 		{"medium_no_variant", "medium", ""},
 		{"empty", "", ""},
 	}
@@ -620,6 +618,78 @@ func TestSpawnArgs_Variant_FallbackWhenNoEffort(t *testing.T) {
 	_, args := b.SpawnArgs(session)
 	assertContains(t, args, "--variant")
 	assertContains(t, args, "high")
+}
+
+// --- SessionName option tests ---
+
+func TestSpawnArgs_SessionName(t *testing.T) {
+	b := New()
+	session := agentrun.Session{
+		Prompt:  "hi",
+		Options: map[string]string{agentrun.OptionSessionName: "my-session"},
+	}
+	_, args := b.SpawnArgs(session)
+	assertContains(t, args, "--title")
+	assertContains(t, args, "my-session")
+}
+
+func TestSpawnArgs_SessionName_PrecedenceOverTitle(t *testing.T) {
+	b := New()
+	session := agentrun.Session{
+		Prompt: "hi",
+		Options: map[string]string{
+			agentrun.OptionSessionName: "root-name",
+			OptionTitle:                "backend-title",
+		},
+	}
+	_, args := b.SpawnArgs(session)
+	assertContains(t, args, "--title")
+	assertContains(t, args, "root-name")
+	assertNotContains(t, args, "backend-title")
+}
+
+func TestSpawnArgs_SessionName_FallsThrough(t *testing.T) {
+	b := New()
+	session := agentrun.Session{
+		Prompt: "hi",
+		Options: map[string]string{
+			agentrun.OptionSessionName: "",
+			OptionTitle:                "fallback-title",
+		},
+	}
+	_, args := b.SpawnArgs(session)
+	assertContains(t, args, "--title")
+	assertContains(t, args, "fallback-title")
+}
+
+func TestSpawnArgs_SessionName_NullByte(t *testing.T) {
+	b := New()
+	session := agentrun.Session{
+		Prompt: "hi",
+		Options: map[string]string{
+			agentrun.OptionSessionName: "bad\x00name",
+			OptionTitle:                "fallback-title",
+		},
+	}
+	_, args := b.SpawnArgs(session)
+	assertContains(t, args, "--title")
+	assertContains(t, args, "fallback-title")
+}
+
+func TestSpawnArgs_SessionName_OverLimit(t *testing.T) {
+	b := New()
+	longName := strings.Repeat("x", maxTitleLen+1)
+	session := agentrun.Session{
+		Prompt: "hi",
+		Options: map[string]string{
+			agentrun.OptionSessionName: longName,
+			OptionTitle:                "fallback-title",
+		},
+	}
+	_, args := b.SpawnArgs(session)
+	assertContains(t, args, "--title")
+	assertContains(t, args, "fallback-title")
+	assertNotContains(t, args, longName)
 }
 
 func assertContains(t *testing.T, args []string, want string) {
