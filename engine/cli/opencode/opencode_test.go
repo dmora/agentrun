@@ -692,6 +692,32 @@ func TestSpawnArgs_SessionName_OverLimit(t *testing.T) {
 	assertNotContains(t, args, longName)
 }
 
+func TestSpawnArgs_SessionName_LeadingDash(t *testing.T) {
+	b := New()
+	session := agentrun.Session{
+		Prompt: "hi",
+		Options: map[string]string{
+			agentrun.OptionSessionName: "-evil",
+			OptionTitle:                "fallback-title",
+		},
+	}
+	_, args := b.SpawnArgs(session)
+	assertContains(t, args, "--title")
+	assertContains(t, args, "fallback-title")
+	assertNotContains(t, args, "-evil")
+}
+
+func TestSpawnArgs_Title_LeadingDash(t *testing.T) {
+	b := New()
+	session := agentrun.Session{
+		Prompt:  "hi",
+		Options: map[string]string{OptionTitle: "-malicious"},
+	}
+	_, args := b.SpawnArgs(session)
+	assertNotContains(t, args, "--title")
+	assertNotContains(t, args, "-malicious")
+}
+
 func assertContains(t *testing.T, args []string, want string) {
 	t.Helper()
 	for _, a := range args {

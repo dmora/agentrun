@@ -206,11 +206,11 @@ func resolveVariant(opts map[string]string) string {
 // Returns empty string when no title should be emitted.
 func resolveTitle(opts map[string]string) string {
 	// Root OptionSessionName takes precedence.
-	if v := opts[agentrun.OptionSessionName]; v != "" && !jsonutil.ContainsNull(v) && len(v) <= maxTitleLen {
+	if v := opts[agentrun.OptionSessionName]; v != "" && !jsonutil.ContainsNull(v) && len(v) <= maxTitleLen && !strings.HasPrefix(v, "-") {
 		return v
 	}
 	// Fall back to backend-specific OptionTitle.
-	if v := opts[OptionTitle]; v != "" && !jsonutil.ContainsNull(v) && len(v) <= maxTitleLen {
+	if v := opts[OptionTitle]; v != "" && !jsonutil.ContainsNull(v) && len(v) <= maxTitleLen && !strings.HasPrefix(v, "-") {
 		return v
 	}
 	return ""
