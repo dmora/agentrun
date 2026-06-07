@@ -1,12 +1,13 @@
 package agy
 
 import (
+	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/dmora/agentrun"
+	"github.com/dmora/agentrun/engine/cli"
 )
 
 func TestBackend_SpawnArgs(t *testing.T) {
@@ -26,98 +27,140 @@ func TestBackend_SpawnArgs(t *testing.T) {
 
 	// args[2] is the binary (argv[0]/$0 inside the script), not a literal "sh".
 	if len(args) < 3 || args[0] != "-c" || args[2] != "agy" {
-		t.Errorf("SpawnArgs wrapper shell signature mismatch: %q", args)
+		t.Fatalf("SpawnArgs wrapper shell signature mismatch: %q", args)
 	}
 
 	wrapperScript := args[1]
-	if !strings.Contains(wrapperScript, `"$0" "$@"`) {
-		t.Errorf("Wrapper script missing injection-safe invocation: %s", wrapperScript)
-	}
-	if !strings.Contains(wrapperScript, `{"type":"result","stop_reason":"end_turn"}`) {
-		t.Errorf("Wrapper script missing MessageResult sentinel: %s", wrapperScript)
+	for _, want := range []string{
+		`"$0" "$@"`,            // injection-safe invocation
+		`mktemp`,               // wrapper self-manages its log (no Go-side temp file)
+		`trap`,                 // signal forwarding to the agy child
+		resultSentinel,         // MessageResult sentinel
+		`"type":"agy_session"`, // conversation-ID sentinel
+	} {
+		if !strings.Contains(wrapperScript, want) {
+			t.Errorf("wrapper script missing %q:\n%s", want, wrapperScript)
+		}
 	}
 
-	// The remaining args are passed to agy
+	// SpawnArgs must NOT inject --log-file (the wrapper allocates it at run time)
+	// and must be a pure builder.
 	agyArgs := args[3:]
-
-	// Check log file injection
-	if len(agyArgs) < 2 || agyArgs[0] != "--log-file" {
-		t.Errorf("Missing --log-file injection: %q", agyArgs)
-	}
-	if b.logFile == "" {
-		t.Error("Backend.logFile not set by SpawnArgs")
-	}
-
-	// Check model
-	foundModel := false
-	for i, arg := range agyArgs {
-		if arg == "--model" && i+1 < len(agyArgs) && agyArgs[i+1] == "gemini-test" {
-			foundModel = true
+	for _, a := range agyArgs {
+		if a == "--log-file" {
+			t.Errorf("SpawnArgs should not inject --log-file; wrapper manages it: %q", agyArgs)
 		}
 	}
-	if !foundModel {
-		t.Errorf("Missing --model flag: %q", agyArgs)
-	}
 
-	// Check prompt and skip perms
+	assertContainsPair(t, agyArgs, "--model", "gemini-test")
 	if agyArgs[len(agyArgs)-2] != "--print" || agyArgs[len(agyArgs)-1] != "hello world" {
-		t.Errorf("Prompt not properly appended: %q", agyArgs)
+		t.Errorf("prompt not appended as final --print arg: %q", agyArgs)
 	}
-
-	foundSkip := false
-	for _, arg := range agyArgs {
-		if arg == "--dangerously-skip-permissions" {
-			foundSkip = true
-		}
-	}
-	if !foundSkip {
-		t.Errorf("Missing skip permissions flag: %q", agyArgs)
+	if !containsArg(agyArgs, "--dangerously-skip-permissions") {
+		t.Errorf("missing skip-permissions flag: %q", agyArgs)
 	}
 }
 
-func TestBackend_ResumeArgs(t *testing.T) {
+// TestBackend_SpawnArgs_PureNoSideEffects guards the Spawner contract: SpawnArgs
+// is called by Engine.Validate with a zero Session and again at Start, so it must
+// build args without creating files or mutating capture state.
+func TestBackend_SpawnArgs_PureNoSideEffects(t *testing.T) {
+	before := countTempLogs(t)
 	b := New()
+	b.SpawnArgs(agentrun.Session{})            // Validate-style call
+	b.SpawnArgs(agentrun.Session{Prompt: "x"}) // Start-style call
+	if b.resumeID.Load() != nil {
+		t.Error("SpawnArgs must not set the captured resume ID")
+	}
+	if after := countTempLogs(t); after != before {
+		t.Errorf("SpawnArgs created temp log files: before=%d after=%d", before, after)
+	}
+}
 
-	// Mock a log file
-	tmpDir := t.TempDir()
-	logPath := filepath.Join(tmpDir, "test.log")
-	logContent := "server.go:753] Created conversation d8e79181-5db2-4ea9-88e2-eea15ddab587\n"
-	if err := os.WriteFile(logPath, []byte(logContent), 0600); err != nil {
-		t.Fatal(err)
+func TestBackend_ResumeArgs_CapturedID(t *testing.T) {
+	b := New()
+	// Simulate turn 1: the wrapper's agy_session sentinel is parsed, capturing
+	// the conversation ID.
+	const id = "d8e79181-5db2-4ea9-88e2-eea15ddab587"
+	if _, err := b.ParseLine(`{"type":"agy_session","id":"` + id + `"}`); !errors.Is(err, cli.ErrSkipLine) {
+		t.Fatalf("agy_session sentinel: err = %v, want ErrSkipLine", err)
+	}
+	if got := b.resumeID.Load(); got == nil || *got != id {
+		t.Fatalf("conversation ID not captured: %v", got)
 	}
 
-	b.logFile = logPath
-
-	session := agentrun.Session{
-		Options: map[string]string{},
-	}
-
-	bin, args, err := b.ResumeArgs(session, "turn 2")
+	bin, args, err := b.ResumeArgs(agentrun.Session{}, "turn 2")
 	if err != nil {
-		t.Fatalf("ResumeArgs failed: %v", err)
+		t.Fatalf("ResumeArgs: %v", err)
 	}
-
 	if bin != "sh" {
 		t.Errorf("ResumeArgs binary = %q, want sh", bin)
 	}
-
 	agyArgs := args[3:]
-	if len(agyArgs) < 2 || agyArgs[0] != "--conversation" || agyArgs[1] != "d8e79181-5db2-4ea9-88e2-eea15ddab587" {
-		t.Errorf("ResumeArgs did not properly parse/inject conversation ID: %q", agyArgs)
+	assertContainsPair(t, agyArgs, "--conversation", id)
+	if agyArgs[len(agyArgs)-1] != "turn 2" {
+		t.Errorf("resume prompt not appended: %q", agyArgs)
 	}
+}
 
-	// Verify log file was deleted
-	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
-		t.Errorf("Log file was not deleted after ResumeArgs")
-	}
-
-	// Second resume should use atomic pointer
-	_, args2, err := b.ResumeArgs(session, "turn 3")
+func TestBackend_ResumeArgs_OptionFallback(t *testing.T) {
+	b := New()
+	const id = "a1b2c3d4-e5f6-7a8b-9c0d-e1f2a3b4c5d6"
+	session := agentrun.Session{Options: map[string]string{agentrun.OptionResumeID: id}}
+	_, args, err := b.ResumeArgs(session, "msg")
 	if err != nil {
-		t.Fatalf("Second ResumeArgs failed: %v", err)
+		t.Fatalf("ResumeArgs: %v", err)
 	}
-	agyArgs2 := args2[3:]
-	if len(agyArgs2) < 2 || agyArgs2[0] != "--conversation" || agyArgs2[1] != "d8e79181-5db2-4ea9-88e2-eea15ddab587" {
-		t.Errorf("Second ResumeArgs did not reuse conversation ID: %q", agyArgs2)
+	assertContainsPair(t, args[3:], "--conversation", id)
+}
+
+func TestBackend_ResumeArgs_NoID(t *testing.T) {
+	b := New()
+	if _, _, err := b.ResumeArgs(agentrun.Session{}, "msg"); err == nil {
+		t.Error("ResumeArgs with no captured ID and no OptionResumeID should error")
 	}
+}
+
+func TestBackend_ResumeArgs_NullBytePrompt(t *testing.T) {
+	b := New()
+	if _, _, err := b.ResumeArgs(agentrun.Session{}, "bad\x00prompt"); err == nil {
+		t.Error("ResumeArgs with null-byte prompt should error")
+	}
+}
+
+// assertContainsPair checks that args contains flag immediately followed by value.
+func assertContainsPair(t *testing.T, args []string, flag, value string) {
+	t.Helper()
+	for i, a := range args {
+		if a == flag && i+1 < len(args) && args[i+1] == value {
+			return
+		}
+	}
+	t.Errorf("args missing %q %q: %q", flag, value, args)
+}
+
+func containsArg(args []string, s string) bool {
+	for _, a := range args {
+		if a == s {
+			return true
+		}
+	}
+	return false
+}
+
+// countTempLogs counts agy-*.log files in the OS temp dir (used to assert
+// SpawnArgs creates none).
+func countTempLogs(t *testing.T) int {
+	t.Helper()
+	matches, err := os.ReadDir(os.TempDir())
+	if err != nil {
+		t.Fatalf("read temp dir: %v", err)
+	}
+	n := 0
+	for _, e := range matches {
+		if strings.HasPrefix(e.Name(), "agy-") && strings.HasSuffix(e.Name(), ".log") {
+			n++
+		}
+	}
+	return n
 }

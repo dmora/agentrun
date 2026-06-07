@@ -46,6 +46,11 @@ func TestParseLine(t *testing.T) {
 				Content: `{"type":"not_result"}`,
 			},
 		},
+		{
+			name:    "agy_session sentinel is captured, not surfaced",
+			line:    `{"type":"agy_session","id":"d8e79181-5db2-4ea9-88e2-eea15ddab587"}`,
+			wantErr: cli.ErrSkipLine,
+		},
 	}
 
 	for _, tc := range tests {
@@ -78,6 +83,7 @@ func FuzzParseLine(f *testing.F) {
 	f.Add(`{"type":"result","stop_reason":"end_turn"}`)
 	f.Add("Some random text output")
 	f.Add("\x00\x00\x00")
+	f.Add(`{"type":"agy_session","id":"d8e79181-5db2-4ea9-88e2-eea15ddab587"}`)
 
 	b := New()
 	f.Fuzz(func(_ *testing.T, line string) {
