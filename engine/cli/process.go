@@ -77,6 +77,7 @@ type process struct {
 }
 
 var _ agentrun.Process = (*process)(nil)
+var _ agentrun.BlockSender = (*process)(nil)
 
 // sequentialProcess wraps a CLI process to satisfy agentrun.SequentialSender.
 // Used for spawn-per-turn backends (Resumer without Streamer).
@@ -85,6 +86,7 @@ type sequentialProcess struct{ *process }
 func (s *sequentialProcess) SequentialSend() {}
 
 var _ agentrun.SequentialSender = (*sequentialProcess)(nil)
+var _ agentrun.BlockSender = (*sequentialProcess)(nil)
 
 // newProcess creates and starts a process with its initial readLoop.
 func newProcess(
@@ -129,8 +131,18 @@ func (p *process) Output() <-chan agentrun.Message {
 
 // Send transmits a user message to the subprocess.
 func (p *process) Send(ctx context.Context, message string) error {
+	return p.SendBlocks(ctx, agentrun.TextBlock(message))
+}
+
+// SendBlocks transmits structured content blocks to the subprocess.
+func (p *process) SendBlocks(ctx context.Context, blocks ...agentrun.ContentBlock) error {
 	if p.stopping.Load() {
 		return agentrun.ErrTerminated
+	}
+
+	// Validate blocks.
+	if err := agentrun.ValidateBlocks(blocks); err != nil {
+		return fmt.Errorf("cli: validate blocks: %w", err)
 	}
 
 	// Check if the session has ended.
@@ -139,14 +151,12 @@ func (p *process) Send(ctx context.Context, message string) error {
 		// For Resumer backends, a clean subprocess exit (termErr == nil) is
 		// the normal end of a turn, not the end of the session. Restart by
 		// spawning a new subprocess with ResumeArgs.
-		//
-		// termErr must be read under mu because resumeAfterCleanExit resets
-		// it under the same lock — concurrent Send() calls would race otherwise.
 		p.mu.Lock()
 		cleanExit := p.caps.resumer != nil && p.termErr == nil
 		p.mu.Unlock()
 		if cleanExit {
-			return p.resumeAfterCleanExit(ctx, message)
+			text := agentrun.TextFromBlocks(blocks)
+			return p.resumeAfterCleanExit(ctx, text)
 		}
 		return agentrun.ErrTerminated
 	default:
@@ -154,12 +164,22 @@ func (p *process) Send(ctx context.Context, message string) error {
 
 	// Path 1: stdin pipe (Streamer mode).
 	if p.stdin != nil {
-		return p.sendStdin(message)
+		if bf, ok := p.backend.(BlockFormatter); ok {
+			data, err := bf.FormatInputBlocks(blocks)
+			if err != nil {
+				return fmt.Errorf("cli: format input blocks: %w", err)
+			}
+			return p.sendStdinData(data)
+		}
+		// Fallback: standard InputFormatter with text degradation.
+		text := agentrun.TextFromBlocks(blocks)
+		return p.sendStdin(text)
 	}
 
 	// Path 2: Resumer (subprocess replacement while running).
 	if p.caps.resumer != nil {
-		return p.replaceSubprocess(ctx, message)
+		text := agentrun.TextFromBlocks(blocks)
+		return p.replaceSubprocess(ctx, text)
 	}
 
 	// Defensive guard — Start() validates send capability; unreachable.
@@ -176,6 +196,11 @@ func (p *process) sendStdin(message string) error {
 	if err != nil {
 		return fmt.Errorf("cli: format input: %w", err)
 	}
+	return p.sendStdinData(data)
+}
+
+// sendStdinData writes pre-formatted data to the subprocess stdin pipe.
+func (p *process) sendStdinData(data []byte) error {
 	p.mu.Lock()
 	stdin := p.stdin
 	p.mu.Unlock()
@@ -246,14 +271,31 @@ func (p *process) Err() error {
 	}
 }
 
-// finish sets the terminal error and closes output+done channels.
-// Called exactly once via sync.Once.
+// finalizeTurn finishes the process unless a concurrent Send has claimed
+// subprocess replacement. The check and the close happen under p.mu so they
+// are atomic with respect to a Send deciding which resume path to take.
+func (p *process) finalizeTurn(err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.replacing {
+		return
+	}
+	p.finishLocked(err)
+}
+
+// finishLocked sets the terminal error and closes output+done channels.
+// Called exactly once via sync.Once. Caller MUST hold p.mu.
+//
+// Closing under p.mu is what makes the turn boundary race-free: a concurrent
+// Send decides between reusing the channels (replaceSubprocess) and allocating
+// fresh ones (resumeAfterCleanExit) under the same lock, so it can never reuse
+// a channel this function just closed.
 //
 // Close order matters: done must close before output so that Err()
 // returns the terminal error immediately after a consumer's range
 // over Output() exits. Closing output first creates a race —
 // the consumer goroutine can call Err() before done is closed.
-func (p *process) finish(err error) {
+func (p *process) finishLocked(err error) {
 	p.finishOnce.Do(func() {
 		p.termErr = err
 		close(p.done)
@@ -292,13 +334,7 @@ func (p *process) readLoop(ctx context.Context, stdout io.ReadCloser) {
 			waitErr = agentrun.ErrTerminated
 		}
 
-		p.mu.Lock()
-		replacing := p.replacing
-		p.mu.Unlock()
-
-		if !replacing {
-			p.finish(waitErr)
-		}
+		p.finalizeTurn(waitErr)
 
 		// Always signal cmdDone so Stop/replaceSubprocess can proceed.
 		p.cmdDone <- struct{}{}
@@ -570,7 +606,8 @@ func applyStopReasonCarryForward(msg *agentrun.Message, last agentrun.StopReason
 	return last
 }
 
-// replaceSubprocess performs the Resumer subprocess-replacement pattern.
+// replaceSubprocess performs the Resumer subprocess-replacement pattern: the
+// running subprocess is interrupted and a fresh one is spawned to resume.
 func (p *process) replaceSubprocess(ctx context.Context, message string) error {
 	binary, args, err := p.caps.resumer.ResumeArgs(p.session, message)
 	if err != nil {
@@ -581,8 +618,29 @@ func (p *process) replaceSubprocess(ctx context.Context, message string) error {
 		return fmt.Errorf("%w: %s: %w", agentrun.ErrUnavailable, binary, err)
 	}
 
-	// Signal old process to terminate.
+	// Claim replacement under p.mu, re-checking the terminal state. The
+	// readLoop's exit defer (finalizeTurn) makes its finish decision under the
+	// same lock, so exactly one of two things happens here:
+	//   - done still open: we set replacing, so the readLoop skips finish and
+	//     the channels are preserved for the replacement subprocess.
+	//   - done already closed: the subprocess finalized between our caller's
+	//     check and now, closing the channels — so we must allocate fresh ones
+	//     via spawnCleanResume rather than reuse the closed channels. This is
+	//     the fix for the turn-boundary race.
 	p.mu.Lock()
+	select {
+	case <-p.done:
+		// Mirror the outer SendBlocks guard: only resume on a clean exit. A turn
+		// that finalized with an error must surface as terminated, not be
+		// silently resumed (which would also discard the terminal error).
+		termErr := p.termErr
+		p.mu.Unlock()
+		if termErr != nil {
+			return agentrun.ErrTerminated
+		}
+		return p.spawnCleanResume(resolvedBinary, args)
+	default:
+	}
 	p.replacing = true
 	oldCancel := p.cancelRead
 	if p.stdin != nil {
@@ -613,8 +671,8 @@ func (p *process) replaceSubprocess(ctx context.Context, message string) error {
 func (p *process) failReplacement(err error) {
 	p.mu.Lock()
 	p.replacing = false
+	p.finishLocked(err)
 	p.mu.Unlock()
-	p.finish(err)
 	select {
 	case p.cmdDone <- struct{}{}:
 	default:
@@ -643,7 +701,14 @@ func (p *process) resumeAfterCleanExit(ctx context.Context, message string) erro
 	if err != nil {
 		return fmt.Errorf("%w: %s: %w", agentrun.ErrUnavailable, binary, err)
 	}
+	return p.spawnCleanResume(resolvedBinary, args)
+}
 
+// spawnCleanResume spawns a resume subprocess after the previous one has exited,
+// allocating fresh output/done channels (and resetting finishOnce) so the new
+// readLoop can finalize the next turn. Used by the normal clean-exit path and by
+// replaceSubprocess when the previous subprocess finalized concurrently.
+func (p *process) spawnCleanResume(resolvedBinary string, args []string) error {
 	cmd, stdin, stdout, err := spawnCmd(resolvedBinary, args, p.session.CWD, p.caps.streamer != nil, p.env, p.opts.StderrWriter)
 	if err != nil {
 		return fmt.Errorf("cli: resume: %w", err)

@@ -648,6 +648,112 @@ func TestSend_Stdin(t *testing.T) {
 	_ = p.Stop(ctx)
 }
 
+type testBlockStreamerBackend struct {
+	testStreamerBackend
+	formatBlocksFn func([]agentrun.ContentBlock) ([]byte, error)
+}
+
+func (b *testBlockStreamerBackend) FormatInputBlocks(blocks []agentrun.ContentBlock) ([]byte, error) {
+	return b.formatBlocksFn(blocks)
+}
+
+func TestSendBlocks_BlockFormatter(t *testing.T) {
+	b := &testBlockStreamerBackend{
+		testStreamerBackend: testStreamerBackend{
+			testBackend: testBackend{
+				spawnFn: func(_ agentrun.Session) (string, []string) {
+					return binCat, nil
+				},
+				parseFn: textParser,
+			},
+			streamFn: func(_ agentrun.Session) (string, []string) {
+				return binCat, nil
+			},
+			formatFn: func(msg string) ([]byte, error) {
+				return []byte(msg + "\n"), nil
+			},
+		},
+		formatBlocksFn: func(blocks []agentrun.ContentBlock) ([]byte, error) {
+			var sb strings.Builder
+			for _, blk := range blocks {
+				sb.WriteString(blk.Type + ":" + blk.Text + ";")
+			}
+			return []byte(sb.String() + "\n"), nil
+		},
+	}
+	eng := cli.NewEngine(b)
+	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t)})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	bs, ok := p.(agentrun.BlockSender)
+	if !ok {
+		t.Fatal("expected process to satisfy BlockSender")
+	}
+
+	err = bs.SendBlocks(testCtx(t), agentrun.TextBlock("hello"), agentrun.TextBlock("world"))
+	if err != nil {
+		t.Fatalf("SendBlocks: %v", err)
+	}
+
+	msg := <-p.Output()
+	if msg.Content != "text:hello;text:world;" {
+		t.Fatalf("expected 'text:hello;text:world;', got %q", msg.Content)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = p.Stop(ctx)
+}
+
+func TestSendBlocks_Fallback(t *testing.T) {
+	// Only implements InputFormatter, not BlockFormatter
+	b := &testStreamerBackend{
+		testBackend: testBackend{
+			spawnFn: func(_ agentrun.Session) (string, []string) {
+				return binCat, nil
+			},
+			parseFn: textParser,
+		},
+		streamFn: func(_ agentrun.Session) (string, []string) {
+			return binCat, nil
+		},
+		formatFn: func(msg string) ([]byte, error) {
+			return []byte(msg + "\n"), nil
+		},
+	}
+	eng := cli.NewEngine(b)
+	p, err := eng.Start(testCtx(t), agentrun.Session{CWD: tempDir(t)})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	bs, ok := p.(agentrun.BlockSender)
+	if !ok {
+		t.Fatal("expected process to satisfy BlockSender")
+	}
+
+	// Should degrade by extracting text and using FormatInput
+	err = bs.SendBlocks(testCtx(t), agentrun.TextBlock("hello"), agentrun.TextBlock("world"))
+	if err != nil {
+		t.Fatalf("SendBlocks: %v", err)
+	}
+
+	msg1 := <-p.Output()
+	if msg1.Content != "hello" {
+		t.Fatalf("expected 'hello', got %q", msg1.Content)
+	}
+	msg2 := <-p.Output()
+	if msg2.Content != "world" {
+		t.Fatalf("expected 'world', got %q", msg2.Content)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = p.Stop(ctx)
+}
+
 func TestSend_Resume(t *testing.T) {
 	b := &testResumerBackend{
 		testBackend: testBackend{

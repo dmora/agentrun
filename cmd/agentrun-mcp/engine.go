@@ -12,10 +12,10 @@ import (
 )
 
 // cliBackendNames lists CLI backend names (excludes ACP).
-var cliBackendNames = []string{backendClaude, backendCodex, backendOpenCode}
+var cliBackendNames = []string{backendClaude, backendCodex, backendOpenCode, backendAgy}
 
 // validBackends lists all known backend names for validation and enumeration.
-var validBackends = []string{backendClaude, backendCodex, backendOpenCode, backendACP}
+var validBackends = []string{backendClaude, backendCodex, backendOpenCode, backendAgy, backendACP}
 
 // makeEngine creates an engine for the given backend name.
 // CLI backends are constructed via newCLIBackend (single source of truth).
@@ -35,6 +35,6 @@ func makeEngine(backend string, stderrW io.Writer, acpBin string, acpExtraArgs [
 		}
 		return acp.NewEngine(opts...), nil
 	}
-	return nil, fmt.Errorf("unknown backend %q (valid: %s, %s, %s, %s)",
-		backend, backendClaude, backendCodex, backendOpenCode, backendACP)
+	return nil, fmt.Errorf("unknown backend %q (valid: %s, %s, %s, %s, %s)",
+		backend, backendClaude, backendCodex, backendOpenCode, backendAgy, backendACP)
 }
