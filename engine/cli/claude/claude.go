@@ -88,6 +88,7 @@ var (
 	_ cli.Resumer        = (*Backend)(nil)
 	_ cli.Streamer       = (*Backend)(nil)
 	_ cli.InputFormatter = (*Backend)(nil)
+	_ cli.BlockFormatter = (*Backend)(nil)
 )
 
 // Option configures a Backend at construction time.
@@ -206,6 +207,31 @@ func (b *Backend) FormatInput(message string) ([]byte, error) {
 		"message": map[string]any{
 			"role":    "user",
 			"content": message,
+		},
+	}
+	data, err := json.Marshal(stdinMsg)
+	if err != nil {
+		return nil, fmt.Errorf("claude: marshal stdin: %w", err)
+	}
+	return append(data, '\n'), nil
+}
+
+// FormatInputBlocks encodes user content blocks for delivery to a Claude stdin pipe.
+// Validates blocks using agentrun.ValidateBlocks and checks for null bytes.
+func (b *Backend) FormatInputBlocks(blocks []agentrun.ContentBlock) ([]byte, error) {
+	if err := agentrun.ValidateBlocks(blocks); err != nil {
+		return nil, fmt.Errorf("claude: %w", err)
+	}
+	for _, blk := range blocks {
+		if blk.Type == "text" && jsonutil.ContainsNull(blk.Text) {
+			return nil, errors.New("claude: text block contains null bytes")
+		}
+	}
+	stdinMsg := map[string]any{
+		"type": "user",
+		"message": map[string]any{
+			"role":    "user",
+			"content": blocks,
 		},
 	}
 	data, err := json.Marshal(stdinMsg)

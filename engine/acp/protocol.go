@@ -152,10 +152,11 @@ type configOptionChoice struct {
 
 // --- Prompt ---
 
-// contentBlock is a single content element in a prompt (MVP: text-only).
+// contentBlock is a single content element in a prompt.
 type contentBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type   string          `json:"type"`
+	Text   string          `json:"text,omitempty"`
+	Source json.RawMessage `json:"source,omitempty"`
 }
 
 // promptParams sends a user message to the session.

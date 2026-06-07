@@ -15,6 +15,7 @@ import (
 
 	"github.com/dmora/agentrun"
 	"github.com/dmora/agentrun/engine/cli"
+	"github.com/dmora/agentrun/engine/cli/agy"
 	"github.com/dmora/agentrun/engine/cli/claude"
 	"github.com/dmora/agentrun/engine/cli/codex"
 	"github.com/dmora/agentrun/engine/cli/opencode"
@@ -29,6 +30,7 @@ const (
 	backendClaude   = "claude"
 	backendCodex    = "codex"
 	backendOpenCode = "opencode"
+	backendAgy      = "agy"
 	backendACP      = "acp"
 )
 
@@ -64,8 +66,10 @@ func newCLIBackend(name string) (cli.Backend, error) {
 		return codex.New(), nil
 	case backendOpenCode:
 		return opencode.New(), nil
+	case backendAgy:
+		return agy.New(), nil
 	default:
-		return nil, fmt.Errorf("unknown CLI backend %q (valid: %s, %s, %s)", name, backendClaude, backendCodex, backendOpenCode)
+		return nil, fmt.Errorf("unknown CLI backend %q (valid: %s, %s, %s, %s)", name, backendClaude, backendCodex, backendOpenCode, backendAgy)
 	}
 }
 
@@ -163,7 +167,7 @@ func detectCapabilities(name string) []string {
 // --- Tool 3: parse_line ---
 
 type parseLineInput struct {
-	Backend string `json:"backend" jsonschema:"Backend name (claude or codex or opencode)"`
+	Backend string `json:"backend" jsonschema:"Backend name (claude or codex or opencode or agy)"`
 	Line    string `json:"line" jsonschema:"Raw JSONL line to parse"`
 }
 
@@ -291,7 +295,7 @@ func toSummaryJSON(s *agentrun.TurnSummary) *turnSummaryJSON {
 // --- Tool 5: run_turn ---
 
 type runTurnInput struct {
-	Backend string            `json:"backend" jsonschema:"Backend name (claude or codex or opencode or acp)"`
+	Backend string            `json:"backend" jsonschema:"Backend name (claude or codex or opencode or agy or acp)"`
 	Prompt  string            `json:"prompt" jsonschema:"User prompt"`
 	Model   string            `json:"model,omitempty" jsonschema:"Model override"`
 	CWD     string            `json:"cwd,omitempty" jsonschema:"Working directory (must be under workspace)"`
@@ -403,9 +407,13 @@ func doRunTurn(ctx context.Context, input runTurnInput) (*runTurnOutput, error) 
 		return nil
 	}
 
-	turnErr := agentrun.RunTurn(ctx, proc, input.Prompt, handler)
+	// RunFirstTurn handles both execution models: spawn-per-turn backends
+	// already ran turn 1 at Start (drain only); streaming/ACP backends need the
+	// prompt sent. Using RunTurn here would spawn a redundant second turn (and
+	// fail outright on resume-only backends whose session ID isn't captured yet).
+	turnErr := agentrun.RunFirstTurn(ctx, proc, input.Prompt, handler)
 	if turnErr != nil {
-		log.Warn("RunTurn error", "error", turnErr)
+		log.Warn("RunFirstTurn error", "error", turnErr)
 	}
 
 	out := collectTerminalState(proc, &summary, start, stderrW)
@@ -422,7 +430,7 @@ func doRunTurn(ctx context.Context, input runTurnInput) (*runTurnOutput, error) 
 // --- Tool 6: session_start ---
 
 type sessionStartInput struct {
-	Backend string            `json:"backend" jsonschema:"Backend name (claude or codex or opencode or acp)"`
+	Backend string            `json:"backend" jsonschema:"Backend name (claude or codex or opencode or agy or acp)"`
 	Prompt  string            `json:"prompt" jsonschema:"Initial prompt"`
 	Model   string            `json:"model,omitempty" jsonschema:"Model override"`
 	CWD     string            `json:"cwd,omitempty" jsonschema:"Working directory (must be under workspace)"`
@@ -489,7 +497,8 @@ func doSessionStart(ctx context.Context, input sessionStartInput) (*sessionStart
 		summary.Add(msg)
 		return nil
 	}
-	turnErr := agentrun.RunTurn(ctx, proc, input.Prompt, handler)
+	// RunFirstTurn handles both execution models (see doRunTurn).
+	turnErr := agentrun.RunFirstTurn(ctx, proc, input.Prompt, handler)
 	if turnErr != nil {
 		log.Warn("first turn error", "error", turnErr)
 	}
@@ -726,7 +735,10 @@ func doProbe(ctx context.Context, backend string) (*probeOutput, error) {
 	defer stopProcess(proc)
 
 	out := &probeOutput{SpawnsOK: true}
-	turnErr := agentrun.RunTurn(ctx, proc, "Say 'hello'.", func(msg agentrun.Message) error {
+	// RunFirstTurn (not RunTurn): for spawn-per-turn backends Start already ran
+	// turn 1, so sending here would trigger a premature resume (no session ID
+	// captured yet) — the same double-prompt bug fixed in doRunTurn.
+	turnErr := agentrun.RunFirstTurn(ctx, proc, "Say 'hello'.", func(msg agentrun.Message) error {
 		applyProbeInit(msg, out)
 		return nil
 	})

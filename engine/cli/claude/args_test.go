@@ -8,6 +8,8 @@ import (
 	"github.com/dmora/agentrun"
 )
 
+const roleUser = "user"
+
 // --- SpawnArgs tests ---
 
 func TestSpawnArgs_Base(t *testing.T) {
@@ -759,14 +761,14 @@ func TestFormatInput(t *testing.T) {
 	if err := json.Unmarshal(data[:len(data)-1], &parsed); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
 	}
-	if parsed["type"] != "user" {
+	if parsed["type"] != roleUser {
 		t.Errorf("type = %v, want user", parsed["type"])
 	}
 	msg, ok := parsed["message"].(map[string]any)
 	if !ok {
 		t.Fatal("missing message field")
 	}
-	if msg["role"] != "user" {
+	if msg["role"] != roleUser {
 		t.Errorf("role = %v, want user", msg["role"])
 	}
 	if msg["content"] != testPrompt {
@@ -814,6 +816,88 @@ func TestFormatInput_Empty(t *testing.T) {
 	}
 	if len(data) == 0 {
 		t.Error("empty message should still produce output")
+	}
+}
+
+// --- FormatInputBlocks tests ---
+
+func TestFormatInputBlocks(t *testing.T) {
+	b := New()
+	blocks := []agentrun.ContentBlock{
+		agentrun.TextBlock("describe this"),
+		agentrun.ImageBase64Block("image/png", "SGVsbG8="),
+	}
+	data, err := b.FormatInputBlocks(blocks)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if data[len(data)-1] != '\n' {
+		t.Error("output should end with newline")
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(data[:len(data)-1], &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if parsed["type"] != roleUser {
+		t.Errorf("type = %v, want user", parsed["type"])
+	}
+	msg, ok := parsed["message"].(map[string]any)
+	if !ok {
+		t.Fatal("missing message field")
+	}
+	if msg["role"] != roleUser {
+		t.Errorf("role = %v, want user", msg["role"])
+	}
+
+	// content should be a list of blocks
+	content, ok := msg["content"].([]any)
+	if !ok {
+		t.Fatalf("content is not an array: %T", msg["content"])
+	}
+	if len(content) != 2 {
+		t.Fatalf("expected 2 content blocks, got %d", len(content))
+	}
+
+	b1, ok := content[0].(map[string]any)
+	if !ok {
+		t.Fatal("content[0] is not a map")
+	}
+	if b1["type"] != "text" || b1["text"] != "describe this" {
+		t.Errorf("unexpected content[0]: %v", b1)
+	}
+
+	b2, ok := content[1].(map[string]any)
+	if !ok {
+		t.Fatal("content[1] is not a map")
+	}
+	if b2["type"] != "image" {
+		t.Errorf("unexpected content[1] type: %v", b2["type"])
+	}
+	source, ok := b2["source"].(map[string]any)
+	if !ok {
+		t.Fatal("missing or invalid source field on content[1]")
+	}
+	if source["type"] != "base64" || source["media_type"] != "image/png" || source["data"] != "SGVsbG8=" {
+		t.Errorf("unexpected source: %v", source)
+	}
+}
+
+func TestFormatInputBlocks_ValidationAndNullBytes(t *testing.T) {
+	b := New()
+
+	// Empty blocks list
+	_, err := b.FormatInputBlocks(nil)
+	if err == nil {
+		t.Error("expected error for empty blocks list")
+	}
+
+	// Null bytes in text block
+	_, err = b.FormatInputBlocks([]agentrun.ContentBlock{
+		agentrun.TextBlock("hello\x00world"),
+	})
+	if err == nil {
+		t.Error("expected error for text block with null bytes")
 	}
 }
 

@@ -104,8 +104,9 @@ func run(backendName, binaryName, argsStr, resumeID string) error {
 		_ = proc.Stop(stopCtx)
 	}()
 
-	// First turn — RunTurn handles all engine types.
-	if err := executeTurn(ctx, proc, firstPrompt); err != nil {
+	// First turn — RunFirstTurn handles all engine types (drains the
+	// Start-initiated turn for spawn-per-turn backends; sends for streaming/ACP).
+	if err := executeTurn(ctx, proc, firstPrompt, true); err != nil {
 		return err
 	}
 
@@ -174,7 +175,7 @@ func repl(ctx context.Context, proc agentrun.Process, scanner *bufio.Scanner) er
 		if line == "exit" || line == "quit" {
 			break
 		}
-		if err := executeTurn(ctx, proc, line); err != nil {
+		if err := executeTurn(ctx, proc, line, false); err != nil {
 			return err
 		}
 	}
@@ -183,14 +184,21 @@ func repl(ctx context.Context, proc agentrun.Process, scanner *bufio.Scanner) er
 	return nil
 }
 
-// executeTurn runs one conversation turn via RunTurn, printing messages
-// with delta-aware formatting.
-func executeTurn(ctx context.Context, proc agentrun.Process, message string) error {
+// executeTurn runs one conversation turn, printing messages with delta-aware
+// formatting. When first is true it uses [agentrun.RunFirstTurn], which drains
+// the turn that Start already initiated for spawn-per-turn backends (Codex,
+// OpenCode) instead of sending a redundant turn; subsequent turns use
+// [agentrun.RunTurn].
+func executeTurn(ctx context.Context, proc agentrun.Process, message string, first bool) error {
 	var sawDelta bool
-	return agentrun.RunTurn(ctx, proc, message, func(msg agentrun.Message) error {
+	handler := func(msg agentrun.Message) error {
 		sawDelta = handleStreamingMessage(msg, sawDelta)
 		return nil
-	})
+	}
+	if first {
+		return agentrun.RunFirstTurn(ctx, proc, message, handler)
+	}
+	return agentrun.RunTurn(ctx, proc, message, handler)
 }
 
 // handleStreamingMessage prints a message with delta-aware formatting.

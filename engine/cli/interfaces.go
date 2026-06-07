@@ -87,3 +87,17 @@ type Backend interface {
 type InputFormatter interface {
 	FormatInput(message string) ([]byte, error)
 }
+
+// BlockFormatter encodes structured content blocks for delivery to a
+// subprocess stdin pipe. BlockFormatter is optional — the CLIEngine
+// discovers it via type assertion:
+//
+//	if f, ok := backend.(BlockFormatter); ok {
+//	    data, err := f.FormatInputBlocks(blocks)
+//	}
+//
+// A backend can implement Streamer, InputFormatter, BlockFormatter, or any
+// combination of them.
+type BlockFormatter interface {
+	FormatInputBlocks(blocks []agentrun.ContentBlock) ([]byte, error)
+}

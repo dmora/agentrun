@@ -1385,3 +1385,34 @@ func TestWithStderrWriter_ACP_Nil_NoOp(t *testing.T) {
 	_ = proc.Stop(context.Background())
 	// No panic = success.
 }
+
+func TestEngine_SendBlocks(t *testing.T) {
+	proc, ctx := startProc(t)
+
+	// Drain init.
+	<-proc.Output()
+
+	bs, ok := proc.(agentrun.BlockSender)
+	if !ok {
+		t.Fatal("expected process to satisfy BlockSender")
+	}
+
+	blocks := []agentrun.ContentBlock{
+		agentrun.TextBlock("describe this"),
+		agentrun.ImageBase64Block("image/png", "SGVsbG8="),
+	}
+	if err := bs.SendBlocks(ctx, blocks...); err != nil {
+		t.Fatalf("SendBlocks: %v", err)
+	}
+
+	msgs := collectUntilResult(proc.Output())
+	if len(msgs) == 0 {
+		t.Fatal("no messages received after SendBlocks")
+	}
+
+	// Verify we got the standard mock response (text + result)
+	deltaText := concatContent(msgs, agentrun.MessageTextDelta)
+	if deltaText != mockTextContent {
+		t.Errorf("text deltas = %q, want %q", deltaText, mockTextContent)
+	}
+}

@@ -42,6 +42,32 @@ func RunTurn(ctx context.Context, proc Process, message string, handler func(Mes
 	return drainOutput(ctx, proc, sendCh, handler)
 }
 
+// RunFirstTurn runs the first turn of a freshly started session, hiding the
+// difference between the two backend execution models so callers don't have to
+// branch on backend type:
+//
+//   - Spawn-per-turn CLI backends (which satisfy [SequentialSender]) initiate
+//     the first turn during Start — the prompt is baked into the spawn command.
+//     RunFirstTurn drains that turn's output without sending. The prompt argument
+//     is ignored for these backends (it was already supplied via Session.Prompt
+//     at Start); pass it anyway for uniformity.
+//
+//   - Streaming and persistent backends (e.g. Claude streaming, ACP) do not run
+//     a turn at Start. RunFirstTurn sends the prompt to initiate the first turn,
+//     then drains — identical to [RunTurn].
+//
+// Use [RunTurn] for every subsequent turn. Like RunTurn, the handler is called
+// for each message including MessageResult, and the caller should provide a
+// context with a deadline or timeout.
+func RunFirstTurn(ctx context.Context, proc Process, prompt string, handler func(Message) error) error {
+	if _, ok := proc.(SequentialSender); ok {
+		// Start already initiated the first turn (prompt baked into the spawn);
+		// drain it without sending to avoid spawning a redundant second turn.
+		return drainOutput(ctx, proc, nil, handler)
+	}
+	return RunTurn(ctx, proc, prompt, handler)
+}
+
 // drainOutput reads from proc.Output() until MessageResult, channel close,
 // or context cancellation. Checks sendCh for Send errors.
 func drainOutput(ctx context.Context, proc Process, sendCh <-chan error, handler func(Message) error) error {

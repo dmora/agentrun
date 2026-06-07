@@ -66,6 +66,7 @@ type process struct {
 }
 
 var _ agentrun.Process = (*process)(nil)
+var _ agentrun.BlockSender = (*process)(nil)
 
 // newProcess creates a process shell. The Conn and ReadLoop are wired up
 // by Engine.Start after construction.
@@ -91,6 +92,13 @@ func (p *process) Output() <-chan agentrun.Message {
 // Blocks until the turn completes (RPC response received) or ctx expires.
 // The caller must drain Output() concurrently — see updateQueueSize.
 func (p *process) Send(ctx context.Context, message string) error {
+	return p.SendBlocks(ctx, agentrun.TextBlock(message))
+}
+
+// SendBlocks transmits structured content blocks to the active session.
+// Blocks until the turn completes (RPC response received) or ctx expires.
+// The caller must drain Output() concurrently.
+func (p *process) SendBlocks(ctx context.Context, blocks ...agentrun.ContentBlock) error {
 	if p.stopping.Load() {
 		return agentrun.ErrTerminated
 	}
@@ -98,6 +106,11 @@ func (p *process) Send(ctx context.Context, message string) error {
 	case <-p.done:
 		return agentrun.ErrTerminated
 	default:
+	}
+
+	// Validate blocks.
+	if err := agentrun.ValidateBlocks(blocks); err != nil {
+		return fmt.Errorf("acp: validate blocks: %w", err)
 	}
 
 	p.turnMu.Lock()
@@ -109,8 +122,14 @@ func (p *process) Send(ctx context.Context, message string) error {
 	}
 
 	// --- Fence: wait for previous turn's RPC goroutine to exit ---
-	// Conn.Call returns immediately on ctx cancel (conn.go:110-112),
-	// so this wait is fast. Ensures clean RPC state before new turn.
+	if err := p.waitPreviousTurn(ctx); err != nil {
+		return err
+	}
+	return p.executeSendBlocks(ctx, blocks)
+}
+
+// waitPreviousTurn blocks until the previous turn's RPC goroutine exits.
+func (p *process) waitPreviousTurn(ctx context.Context) error {
 	if p.rpcDone != nil {
 		select {
 		case <-p.rpcDone:
@@ -120,7 +139,11 @@ func (p *process) Send(ctx context.Context, message string) error {
 			return ctx.Err()
 		}
 	}
+	return nil
+}
 
+// executeSendBlocks executes the prompt RPC after locks and fences are resolved.
+func (p *process) executeSendBlocks(ctx context.Context, blocks []agentrun.ContentBlock) error {
 	// --- Create per-turn collectors ---
 	td := &turnDenials{}
 	ta := &turnAccumulator{}
@@ -136,10 +159,20 @@ func (p *process) Send(ctx context.Context, message string) error {
 		p.turnAccum.Store(nil)
 	}()
 
+	// Translate agentrun.ContentBlock to acp.contentBlock
+	acpBlocks := make([]contentBlock, len(blocks))
+	for i, b := range blocks {
+		acpBlocks[i] = contentBlock{
+			Type:   b.Type,
+			Text:   b.Text,
+			Source: b.Source,
+		}
+	}
+
 	// Send session/prompt request.
 	params := promptParams{
 		SessionID: p.sessionID,
-		Prompt:    []contentBlock{{Type: "text", Text: message}},
+		Prompt:    acpBlocks,
 	}
 
 	var result promptResult
