@@ -1251,17 +1251,37 @@ func TestParseLine_MissingParentToolUseIDUsagePreserved(t *testing.T) {
 
 func TestParseLine_SubagentResultUsageNilledOut(t *testing.T) {
 	b := New()
-	// Subagent result event — unlikely in practice but defensive.
-	line := `{"type":"result","result":"done","usage":{"input_tokens":500,"output_tokens":200},"parent_tool_use_id":"toolu_abc"}`
+	// Subagent result event (parent_tool_use_id set): the common case for any
+	// station that spawns a Task/Explore subagent. It must be demoted to a
+	// non-terminating MessageSubagentResult so it cannot end the parent turn
+	// (issue #57). Its Usage must be dropped so it does not inflate the parent's
+	// context-fill tracking, and the other result-only fields (StopReason,
+	// IsError, Denials) must be cleared so a subagent's outcome cannot leak onto
+	// the parent turn — StopReason especially, which would otherwise be carried
+	// forward onto the parent's real MessageResult (PR #58).
+	line := `{"type":"result","result":"done","usage":{"input_tokens":500,"output_tokens":200},"stop_reason":"max_tokens","is_error":true,"permission_denials":[{"tool":"x","reason":"y"}],"parent_tool_use_id":"toolu_abc"}`
 	msg, err := b.ParseLine(line)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if msg.Type != agentrun.MessageResult {
-		t.Errorf("type = %q, want %q", msg.Type, agentrun.MessageResult)
+	if msg.Type != agentrun.MessageSubagentResult {
+		t.Errorf("type = %q, want %q", msg.Type, agentrun.MessageSubagentResult)
 	}
 	if msg.Usage != nil {
 		t.Errorf("subagent result Usage should be nil, got %+v", msg.Usage)
+	}
+	if msg.StopReason != "" {
+		t.Errorf("subagent result StopReason should be cleared, got %q", msg.StopReason)
+	}
+	if msg.IsError {
+		t.Error("subagent result IsError should be cleared, got true")
+	}
+	if len(msg.Denials) != 0 {
+		t.Errorf("subagent result Denials should be cleared, got %+v", msg.Denials)
+	}
+	// Content is preserved so consumers still see the subagent's text.
+	if msg.Content != "done" {
+		t.Errorf("Content = %q, want %q", msg.Content, "done")
 	}
 }
 
