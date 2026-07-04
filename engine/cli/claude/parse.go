@@ -65,6 +65,13 @@ func (b *Backend) ParseLine(line string) (agentrun.Message, error) {
 	// Raw JSON is preserved for consumers who need per-subagent usage.
 	if isSubagentEvent(raw) {
 		msg.Usage = nil
+		// A subagent's terminal "result" line must not end the parent turn.
+		// Demote it to MessageSubagentResult so drainOutput waits for the
+		// parent's own result (see issue #57). Only the parent's result
+		// (no parent_tool_use_id) reaches parseResultMessage as MessageResult.
+		if msg.Type == agentrun.MessageResult {
+			msg.Type = agentrun.MessageSubagentResult
+		}
 	}
 
 	return msg, nil

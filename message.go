@@ -32,6 +32,15 @@ const (
 	// Token usage and cost data are in Message.Usage.
 	MessageResult MessageType = "result"
 
+	// MessageSubagentResult is the terminal result of a subagent (e.g., the
+	// Task/Explore tool) nested inside the parent turn — NOT the parent turn's
+	// completion. Backends demote a subagent's result line to this type so it
+	// does not terminate the turn: RunTurn/drainOutput stop only on the parent's
+	// own MessageResult. Consumers that watch for turn completion (e.g.,
+	// filter.ResultOnly) should ignore this type; it carries the subagent's
+	// text in Content, with per-subagent detail available in Raw.
+	MessageSubagentResult MessageType = "subagent_result"
+
 	// MessageContextWindow carries context window fill state emitted mid-turn.
 	// Contains window capacity and current fill level.
 	//

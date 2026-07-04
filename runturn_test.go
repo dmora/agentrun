@@ -359,3 +359,68 @@ func TestRunTurn_Sequential_FreshChannel(t *testing.T) {
 		t.Errorf("msgs[0].Content = %q, want %q (should read from fresh channel)", msgs[0].Content, "fresh")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Subagent turn-boundary regression (issue #57)
+// ---------------------------------------------------------------------------
+
+// TestRunTurn_SubagentResultDoesNotEndTurn pins the fix for issue #57 on a
+// persistent (reused-channel) process — the streaming case the bug was reported
+// against. A subagent's terminal line is demoted by the backend to
+// MessageSubagentResult; drainOutput must NOT treat it as turn completion, so
+// RunTurn returns only at the parent's own MessageResult with the full turn
+// drained. It then verifies a subsequent RunTurn on the SAME process sees none
+// of the first turn's messages — proving the premature-return + cross-dispatch
+// bleed described in the issue cannot occur.
+func TestRunTurn_SubagentResultDoesNotEndTurn(t *testing.T) {
+	mp := newMockProcess()
+
+	// Turn 1: narration, then a subagent result (would have ended the turn
+	// early under the bug), then the parent's real deliverable + result.
+	mp.output <- Message{Type: MessageText, Content: "launched an Explore agent"}
+	mp.output <- Message{Type: MessageSubagentResult, Content: "subagent findings"}
+	mp.output <- Message{Type: MessageText, Content: "the real deliverable"}
+	mp.output <- Message{Type: MessageResult, Content: "parent done"}
+
+	var turn1 []Message
+	if err := RunTurn(context.Background(), mp, "dispatch #1", func(msg Message) error {
+		turn1 = append(turn1, msg)
+		return nil
+	}); err != nil {
+		t.Fatalf("turn 1 RunTurn error: %v", err)
+	}
+
+	// (a) The turn drained fully — it did not return at the subagent result.
+	if len(turn1) != 4 {
+		t.Fatalf("turn 1 got %d messages, want 4 (no early return at subagent result): %+v", len(turn1), turn1)
+	}
+	if turn1[1].Type != MessageSubagentResult {
+		t.Errorf("turn1[1].Type = %q, want %q (subagent result must be delivered, not terminating)", turn1[1].Type, MessageSubagentResult)
+	}
+	if turn1[2].Content != "the real deliverable" {
+		t.Errorf("turn1[2].Content = %q, want the parent deliverable", turn1[2].Content)
+	}
+	if last := turn1[len(turn1)-1]; last.Type != MessageResult || last.Content != "parent done" {
+		t.Errorf("turn 1 ended on %+v, want the parent MessageResult", last)
+	}
+
+	// Turn 2: on the SAME persistent process. Under the bug, turn 1 would have
+	// left "the real deliverable"+parent result queued and turn 2 would read
+	// them (cross-dispatch bleed). With the fix, turn 2 sees only its own output.
+	mp.output <- Message{Type: MessageText, Content: "dispatch #2 output"}
+	mp.output <- Message{Type: MessageResult, Content: "second done"}
+
+	var turn2 []Message
+	if err := RunTurn(context.Background(), mp, "dispatch #2", func(msg Message) error {
+		turn2 = append(turn2, msg)
+		return nil
+	}); err != nil {
+		t.Fatalf("turn 2 RunTurn error: %v", err)
+	}
+	if len(turn2) != 2 {
+		t.Fatalf("turn 2 got %d messages, want 2 (no bleed from turn 1): %+v", len(turn2), turn2)
+	}
+	if turn2[0].Content != "dispatch #2 output" {
+		t.Errorf("turn2[0].Content = %q, want %q (turn 1 must not bleed in)", turn2[0].Content, "dispatch #2 output")
+	}
+}
