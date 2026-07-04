@@ -71,6 +71,14 @@ func (b *Backend) ParseLine(line string) (agentrun.Message, error) {
 		// (no parent_tool_use_id) reaches parseResultMessage as MessageResult.
 		if msg.Type == agentrun.MessageResult {
 			msg.Type = agentrun.MessageSubagentResult
+			// Strip the result-only fields parseResultMessage populated: a
+			// subagent's stop reason, error flag, and denials describe the
+			// subagent, not the parent turn. Leaving StopReason set is the
+			// worst offender — the engine's carry-forward would capture it
+			// and apply it to the parent's real MessageResult (see PR #58).
+			msg.StopReason = ""
+			msg.IsError = false
+			msg.Denials = nil
 		}
 	}
 
