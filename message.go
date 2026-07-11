@@ -33,22 +33,53 @@ const (
 	MessageResult MessageType = "result"
 
 	// MessageSubagentResult is the terminal result of a subagent (e.g., the
-	// Task/Explore tool) nested inside the parent turn — NOT the parent turn's
+	// Task/Agent tool) nested inside the parent turn — NOT the parent turn's
 	// completion.
 	//
-	// Backends demote a subagent's result line to this type so it does not
-	// terminate the turn: RunTurn/drainOutput stop only on the parent's own
-	// MessageResult. Consumers that watch for turn completion (e.g.,
-	// filter.ResultOnly) should ignore this type.
+	// Two sources produce this type:
+	//   1. Demotion: a subagent's own "result" line (parent_tool_use_id set)
+	//      is demoted so it does not terminate the turn (issue #57).
+	//   2. Notification (Claude CLI): a background subagent never emits its own
+	//      result line — its completion arrives as a separate system
+	//      "task_notification" with a terminal status. The Claude backend maps
+	//      that line to MessageSubagentResult with ParentToolUseID set to the
+	//      notification's tool_use_id, so background completions are visible to
+	//      the same consumers.
+	//
+	// Either way this type does not terminate the turn: RunTurn/drainOutput
+	// stop only on the parent's own MessageResult. Consumers that watch for
+	// turn completion (e.g., filter.ResultOnly) should ignore this type.
 	//
 	// Field semantics on this message:
-	//   - Content: the subagent's result text, preserved.
+	//   - Content: the subagent's result text or notification summary.
+	//   - ParentToolUseID: the completing subagent's correlation id.
+	//   - Subagents: outstanding subagent stats after this completion (when
+	//     tracking is enabled).
 	//   - Raw: the original event, for consumers needing per-subagent detail.
 	//   - Usage, StopReason, IsError, Denials: cleared. These describe the
 	//     subagent, not the parent turn, and are dropped so they cannot leak
 	//     into the parent's turn accounting (StopReason in particular would
 	//     otherwise be carried forward onto the parent's real MessageResult).
 	MessageSubagentResult MessageType = "subagent_result"
+
+	// MessageBackgroundTasks carries an authoritative snapshot of the backend's
+	// currently in-flight background subagent tasks, emitted every time that
+	// set changes. Tools holds one entry per in-flight task, with
+	// ToolCall.ID = the backend's task id; the slice is non-nil even when empty
+	// (an empty snapshot means the set drained to zero).
+	//
+	// Source:
+	//   - Claude CLI: synthesized from the native "background_tasks_changed"
+	//     system event, filtered to subagent tasks (task_type "local_agent");
+	//     background Bash tasks are excluded. This is the load-bearing
+	//     quiescence signal — it reports the true pending set across
+	//     auto-resume boundaries, including a subagent revived under a fresh
+	//     tool_use id (which name-based counting cannot see).
+	//
+	// This type does not terminate a turn and carries no Usage/StopReason.
+	// Consumers that only care about turn completion should ignore it; subagent
+	// tracking consumes it as the authoritative pending set.
+	MessageBackgroundTasks MessageType = "background_tasks"
 
 	// MessageContextWindow carries context window fill state emitted mid-turn.
 	// Contains window capacity and current fill level.
@@ -120,7 +151,33 @@ type Message struct {
 	Content string `json:"content,omitempty"`
 
 	// Tool contains tool invocation details (for ToolUse, ToolResult messages).
+	// When an assistant message carries multiple tool_use blocks, Tool holds
+	// the LAST one (last-one-wins, preserved for backward compatibility). Use
+	// Tools to see every tool_use block in the message.
 	Tool *ToolCall `json:"tool,omitempty"`
+
+	// Tools holds every tool_use block parsed from a single assistant message,
+	// in wire order. Tool remains the last entry for back-compat. This exists
+	// because a message may spawn several subagents at once (parallel fan-out):
+	// last-one-wins would undercount them. Nil when the message carries no
+	// tool_use blocks. On MessageBackgroundTasks messages, Tools instead
+	// carries one entry per in-flight background task (ToolCall.ID = task id).
+	Tools []*ToolCall `json:"tools,omitempty"`
+
+	// ParentToolUseID is the id of the tool_use that owns this message, taken
+	// from the backend's parent_tool_use_id. Non-empty means the message
+	// originated inside a subagent sidechain (the value is the parent's spawn
+	// tool_use id); empty means a parent-session (top-level) event. On a
+	// MessageSubagentResult it is the completing subagent's correlation id —
+	// the key subagent tracking removes from its pending set.
+	ParentToolUseID string `json:"parent_tool_use_id,omitempty"`
+
+	// Subagents reports outstanding subagent work at the time this message was
+	// produced. Stamped on MessageResult and MessageSubagentResult, and only
+	// when subagent tracking is enabled (cli.WithSubagentTools). Nil means the
+	// backend does not track subagents — see SubagentStats for why nil differs
+	// from Pending()==0.
+	Subagents *SubagentStats `json:"subagents,omitempty"`
 
 	// Usage contains token usage data (typically on Text messages).
 	Usage *Usage `json:"usage,omitempty"`
@@ -208,11 +265,59 @@ type ToolCall struct {
 	// Name is the tool identifier.
 	Name string `json:"name"`
 
+	// ID is the backend-assigned identifier of the tool_use content block
+	// (e.g., Claude's "toolu_..." id). Empty when the backend does not report
+	// a per-call id. Used to correlate a spawn with its later completion —
+	// subagent tracking keys the pending set on this id (see SubagentStats).
+	ID string `json:"id,omitempty"`
+
 	// Input is the tool's input parameters as raw JSON.
 	Input json.RawMessage `json:"input,omitempty"`
 
 	// Output is the tool's result as raw JSON.
 	Output json.RawMessage `json:"output,omitempty"`
+}
+
+// SubagentStats reports the parent turn's outstanding subagent work at the
+// moment a message was produced. It is stamped on MessageResult and
+// MessageSubagentResult when — and only when — the engine is configured to
+// track subagents (cli.WithSubagentTools with a non-empty set). A nil
+// Subagents field therefore means "this backend does not track subagents"
+// (the default), NOT "zero subagents": consumers must treat nil and
+// non-nil-with-Pending()==0 differently. This distinction is what lets a
+// consumer safely wait ("linger") for background subagents to quiesce only
+// on backends that can actually report quiescence.
+//
+// Per-backend matrix (mirrors the Denials field convention):
+//   - Claude CLI: populated when cli.WithSubagentTools is set. The pending
+//     set is driven authoritatively by the CLI's native background-task feed
+//     (MessageBackgroundTasks), with name-based tool_use counting as a
+//     fallback before the first native snapshot arrives.
+//   - Codex/OpenCode/agy/ACP: never populated (nil) — they neither emit the
+//     native feed nor the MessageSubagentResult demote, and crucible does not
+//     opt them into tracking.
+type SubagentStats struct {
+	// Started is the cumulative count of distinct subagents observed to start
+	// during the current subprocess (reset on MessageInit).
+	Started int `json:"started"`
+
+	// Finished is the cumulative count of subagents observed to complete.
+	Finished int `json:"finished"`
+
+	// PendingIDs is a snapshot of the currently-outstanding subagent ids,
+	// capped at 32 entries (memory bound; the full count is Started-Finished).
+	PendingIDs []string `json:"pending_ids,omitempty"`
+}
+
+// Pending returns the number of subagents that started but have not yet been
+// observed to finish. Zero means quiescent (all tracked subagents done);
+// a positive value means the parent turn ended while background work is still
+// in flight. Nil-safe: a nil receiver reports 0.
+func (s *SubagentStats) Pending() int {
+	if s == nil {
+		return 0
+	}
+	return s.Started - s.Finished
 }
 
 // StopReason indicates why an agent's turn ended.

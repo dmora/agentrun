@@ -33,6 +33,10 @@ func (b *Backend) ParseLine(line string) (agentrun.Message, error) {
 
 	var msg agentrun.Message
 	msg.Raw = json.RawMessage(line)
+	// Stamp the parent tool-use correlation id up front. Type-specific parsing
+	// may override it (a task_notification uses its own tool_use_id as the
+	// completing subagent's correlation id).
+	msg.ParentToolUseID = parentToolUseID(raw)
 
 	switch typeStr {
 	case "system":
@@ -85,19 +89,83 @@ func (b *Backend) ParseLine(line string) (agentrun.Message, error) {
 	return msg, nil
 }
 
-// parseSystemMessage handles "system" events, detecting init subtype.
+// parseSystemMessage handles "system" events, detecting the init,
+// background_tasks_changed, and task_notification subtypes.
 func parseSystemMessage(raw map[string]any, msg *agentrun.Message) {
-	subtype := jsonutil.GetString(raw, "subtype")
-	if subtype == "init" {
+	switch jsonutil.GetString(raw, "subtype") {
+	case "init":
 		msg.Type = agentrun.MessageInit
 		msg.ResumeID = jsonutil.GetString(raw, "session_id")
 		if model := errfmt.SanitizeCode(jsonutil.GetString(raw, "model")); model != "" {
 			msg.Init = &agentrun.InitMeta{Model: model}
 		}
+	case "background_tasks_changed":
+		parseBackgroundTasks(raw, msg)
+	case "task_notification":
+		parseTaskNotification(raw, msg)
+	default:
+		msg.Type = agentrun.MessageSystem
+		msg.Content = jsonutil.GetString(raw, "message")
+	}
+}
+
+// subagentTaskType is the Claude task_type that denotes a spawned subagent
+// (the Task/Agent tool). Background Bash tasks report "local_bash" and are
+// deliberately excluded from the subagent pending set — a station may leave a
+// long-running server task running, which would never quiesce.
+const subagentTaskType = "local_agent"
+
+// terminalTaskStatuses are the task_notification statuses that mean a
+// background task has finished (as opposed to a progress update).
+var terminalTaskStatuses = map[string]struct{}{
+	"completed": {},
+	"failed":    {},
+	"error":     {},
+	"cancelled": {},
+	"canceled":  {},
+	"timeout":   {},
+}
+
+// parseBackgroundTasks maps a "background_tasks_changed" event to
+// MessageBackgroundTasks, carrying one ToolCall per in-flight subagent task
+// (ID = task id) in Tools. Non-subagent tasks (e.g., local_bash) are filtered
+// out here so the generic tracker can treat the slice as the authoritative
+// subagent pending set. Tools is always non-nil (empty means the set drained).
+func parseBackgroundTasks(raw map[string]any, msg *agentrun.Message) {
+	msg.Type = agentrun.MessageBackgroundTasks
+	tasks, _ := raw["tasks"].([]any)
+	out := make([]*agentrun.ToolCall, 0, len(tasks))
+	for _, t := range tasks {
+		tm, ok := t.(map[string]any)
+		if !ok {
+			continue
+		}
+		if jsonutil.GetString(tm, "task_type") != subagentTaskType {
+			continue
+		}
+		if id := jsonutil.GetString(tm, "task_id"); id != "" {
+			out = append(out, &agentrun.ToolCall{ID: id})
+		}
+	}
+	msg.Tools = out
+}
+
+// parseTaskNotification maps a terminal "task_notification" (a background
+// subagent's completion, which never arrives as its own result line) to
+// MessageSubagentResult, correlating it via the notification's tool_use_id.
+// Non-terminal notifications stay plain system messages. task_notification
+// carries no task_type, so subagent scoping is handled downstream by the
+// tracker's idempotent remove (a non-subagent id was never in the set).
+func parseTaskNotification(raw map[string]any, msg *agentrun.Message) {
+	status := jsonutil.GetString(raw, "status")
+	if _, terminal := terminalTaskStatuses[status]; !terminal {
+		msg.Type = agentrun.MessageSystem
+		msg.Content = jsonutil.GetString(raw, "message")
 		return
 	}
-	msg.Type = agentrun.MessageSystem
-	msg.Content = jsonutil.GetString(raw, "message")
+	msg.Type = agentrun.MessageSubagentResult
+	msg.ParentToolUseID = jsonutil.GetString(raw, "tool_use_id")
+	msg.Content = jsonutil.GetString(raw, "summary")
 }
 
 // parseAssistantMessage handles "assistant" events with text and optional tool_use.
@@ -127,7 +195,10 @@ func parseAssistantMessage(raw map[string]any, msg *agentrun.Message) {
 
 // parseAssistantContent iterates the content array inside an assistant message,
 // concatenating text blocks, capturing thinking blocks, and capturing tool_use
-// blocks (last one wins).
+// blocks. Every tool_use block is appended to msg.Tools (in wire order);
+// msg.Tool holds the last one (last-one-wins, kept for backward compatibility).
+// Capturing all of them matters for parallel fan-out — several subagents spawned
+// in one assistant message would otherwise be undercounted.
 //
 // When the content array contains only thinking blocks (no text), the message
 // type is set to MessageThinking. Otherwise it stays MessageText and thinking
@@ -151,7 +222,9 @@ func parseAssistantContent(message map[string]any, msg *agentrun.Message) {
 				thinking.WriteString(t)
 			}
 		case "tool_use":
-			msg.Tool = extractToolCall(cm)
+			tc := extractToolCall(cm)
+			msg.Tool = tc
+			msg.Tools = append(msg.Tools, tc)
 		default:
 			// "text" and any other content block type with a "text" field.
 			if t, ok := cm["text"].(string); ok {
@@ -171,10 +244,13 @@ func parseAssistantContent(message map[string]any, msg *agentrun.Message) {
 	}
 }
 
-// extractToolCall builds a ToolCall from a content block map.
+// extractToolCall builds a ToolCall from a content block map. The block "id"
+// (Claude's "toolu_..." tool_use id) is captured so a spawn can be correlated
+// with its later completion — subagent tracking keys on it.
 func extractToolCall(cm map[string]any) *agentrun.ToolCall {
 	tool := &agentrun.ToolCall{
 		Name: jsonutil.GetString(cm, "name"),
+		ID:   jsonutil.GetString(cm, "id"),
 	}
 	if input, ok := cm["input"]; ok {
 		if data, err := json.Marshal(input); err == nil {
@@ -361,6 +437,17 @@ func extractTokenUsage(source map[string]any) *agentrun.Usage {
 func isSubagentEvent(raw map[string]any) bool {
 	v, ok := raw["parent_tool_use_id"]
 	return ok && v != nil
+}
+
+// parentToolUseID returns the event's parent_tool_use_id as a string, or ""
+// when it is absent or null. This is the subagent-sidechain correlation id.
+func parentToolUseID(raw map[string]any) string {
+	v, ok := raw["parent_tool_use_id"]
+	if !ok || v == nil {
+		return ""
+	}
+	s, _ := v.(string)
+	return s
 }
 
 // sanitizeUnknownType converts an unknown type string to a MessageType.
