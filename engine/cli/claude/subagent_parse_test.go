@@ -146,6 +146,26 @@ func TestParseLine_BackgroundTasksChanged_MixedKinds(t *testing.T) {
 	}
 }
 
+func TestParseLine_BackgroundTasksChanged_SkipsEntriesWithoutID(t *testing.T) {
+	b := New()
+	// A task whose task_id is absent (or sanitizes to empty) cannot be
+	// correlated or removed later — it must not become a payload entry.
+	line := `{"type":"system","subtype":"background_tasks_changed","tasks":[` +
+		`{"task_type":"local_bash","description":"no id"},` +
+		`{"task_id":"b2fvr000k","task_type":"local_bash","description":"ok"}` +
+		`]}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(msg.Tasks) != 1 {
+		t.Fatalf("len(Tasks) = %d, want 1 (id-less entry skipped)", len(msg.Tasks))
+	}
+	if msg.Tasks[0].ID != "b2fvr000k" {
+		t.Errorf("Tasks[0].ID = %q, want %q", msg.Tasks[0].ID, "b2fvr000k")
+	}
+}
+
 func TestParseLine_BackgroundTasksChanged_EmptyIsNonNil(t *testing.T) {
 	b := New()
 	// Drained set, real wire shape (testdata/backgroundtask/streaming.jsonl:15).

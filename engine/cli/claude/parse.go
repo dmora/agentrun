@@ -212,8 +212,14 @@ func parseBackgroundTasks(raw map[string]any, msg *agentrun.Message) {
 		if !ok {
 			continue
 		}
+		id := errfmt.SanitizeCode(jsonutil.GetString(tm, "task_id"))
+		if id == "" {
+			// An entry without an id cannot be correlated or removed later —
+			// skip it rather than emit a dead payload entry.
+			continue
+		}
 		entries = append(entries, agentrun.BackgroundTask{
-			ID:          errfmt.SanitizeCode(jsonutil.GetString(tm, "task_id")),
+			ID:          id,
 			Kind:        backgroundTaskKind(jsonutil.GetString(tm, "task_type")),
 			Description: errfmt.Truncate(jsonutil.GetString(tm, "description")),
 		})
