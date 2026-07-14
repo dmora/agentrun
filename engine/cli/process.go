@@ -368,6 +368,11 @@ func (p *process) scanLines(ctx context.Context, stdout io.ReadCloser) error {
 
 	var lastStopReason agentrun.StopReason
 	var maxCallFill int
+	// Loop-local, scoped to this subprocess. Nil (inert) unless the engine was
+	// configured with WithSubagentTools; a subprocess replacement starts a
+	// fresh tracker, which is correct — replacement kills any in-process
+	// subagents we were waiting on.
+	tracker := newSubagentTracker(p.opts.SubagentTools)
 
 	for {
 		line, err := lr.ReadLineString()
@@ -387,7 +392,7 @@ func (p *process) scanLines(ctx context.Context, stdout io.ReadCloser) error {
 		if backendError {
 			maxCallFill = 0
 		}
-		lastStopReason, maxCallFill = p.enrichMessage(&msg, lastStopReason, maxCallFill)
+		lastStopReason, maxCallFill = p.enrichMessage(&msg, lastStopReason, maxCallFill, tracker)
 
 		if !p.emitWithSynthesis(ctx, msg) {
 			return nil
@@ -441,9 +446,9 @@ func synthesizeContextWindow(msg agentrun.Message) *agentrun.Message {
 
 // enrichMessage applies engine-level enrichment to a parsed message:
 // error-boundary fill reset, stop-reason carry-forward, process metadata,
-// context fill tracking, and result acknowledgement.
+// context fill tracking, result acknowledgement, and subagent tracking.
 // Returns updated (lastStopReason, maxCallFill) for the next iteration.
-func (p *process) enrichMessage(msg *agentrun.Message, lastStopReason agentrun.StopReason, maxCallFill int) (agentrun.StopReason, int) {
+func (p *process) enrichMessage(msg *agentrun.Message, lastStopReason agentrun.StopReason, maxCallFill int, tracker *subagentTracker) (agentrun.StopReason, int) {
 	lastStopReason = applyStopReasonCarryForward(msg, lastStopReason)
 	if msg.Type == agentrun.MessageInit {
 		msg.Process = p.processMetaSnapshot()
@@ -451,6 +456,14 @@ func (p *process) enrichMessage(msg *agentrun.Message, lastStopReason agentrun.S
 	maxCallFill = applyContextFill(msg, maxCallFill)
 	if msg.Type == agentrun.MessageResult {
 		p.awaitingResult.Store(false)
+	}
+	// Fold into the subagent pending set, then stamp the outcome on the two
+	// result-bearing types. observe-before-stamp so a completion's stamp
+	// reflects the post-removal count. Both are no-ops on a nil (inert)
+	// tracker, leaving Message.Subagents nil.
+	tracker.observe(msg)
+	if msg.Type == agentrun.MessageResult || msg.Type == agentrun.MessageSubagentResult {
+		tracker.stamp(msg)
 	}
 	return lastStopReason, maxCallFill
 }

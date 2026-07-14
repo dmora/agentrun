@@ -36,6 +36,23 @@ type EngineOptions struct {
 	// for concurrent use if the caller reads or resets the writer between
 	// turns.
 	StderrWriter io.Writer
+
+	// SubagentTools is the set of parent-level tool names that spawn a
+	// subagent (e.g., "Task", "Agent"). It gates subagent tracking: when EMPTY
+	// (the default), the engine performs no tracking and never stamps
+	// Message.Subagents — today's behavior, byte-identical, with no linger
+	// signal for consumers. When non-empty, the engine tracks outstanding
+	// subagents and stamps SubagentStats on MessageResult/MessageSubagentResult.
+	//
+	// The names drive the name-based fallback path (add a pending id when a
+	// parent-level tool_use in this set is seen). Backends that emit a native
+	// background-task feed (Claude's MessageBackgroundTasks) supersede the
+	// name-based path with the authoritative pending set once the first
+	// snapshot arrives; for those backends the set primarily acts as the
+	// opt-in switch. Empty is deliberately the default so backends that
+	// coincidentally use a tool named "Task" are not tracked unless the caller
+	// explicitly opts in.
+	SubagentTools map[string]struct{}
 }
 
 // EngineOption configures an Engine at construction time.
@@ -85,6 +102,29 @@ func WithGracePeriod(d time.Duration) EngineOption {
 func WithStderrWriter(w io.Writer) EngineOption {
 	return func(o *EngineOptions) {
 		o.StderrWriter = w
+	}
+}
+
+// WithSubagentTools enables subagent tracking for parent-level tool calls
+// whose name is in the given set (e.g., "Task", "Agent"). With no names (or
+// only empty names) tracking stays OFF and Message.Subagents is never stamped
+// — the default. Repeated calls union the names. Blank names are ignored.
+//
+// Enable this only for backends that report subagent completion
+// (MessageSubagentResult) or a native background-task feed
+// (MessageBackgroundTasks); otherwise a started subagent never decrements and
+// Pending() would stay positive forever.
+func WithSubagentTools(names ...string) EngineOption {
+	return func(o *EngineOptions) {
+		for _, n := range names {
+			if n == "" {
+				continue
+			}
+			if o.SubagentTools == nil {
+				o.SubagentTools = make(map[string]struct{})
+			}
+			o.SubagentTools[n] = struct{}{}
+		}
 	}
 }
 

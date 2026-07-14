@@ -25,15 +25,21 @@
 //
 //   - [agentrun.MessageInit] — session start (from "system/init" or "init" events)
 //   - [agentrun.MessageSystem] — system status messages
-//   - [agentrun.MessageText] — assistant text, may include a [agentrun.ToolCall] via Message.Tool
+//   - [agentrun.MessageText] — assistant text, may include tool calls via Message.Tool/Tools
 //   - [agentrun.MessageToolResult] — completed tool execution (from "tool" events)
 //   - [agentrun.MessageResult] — turn completion with optional usage data
+//   - [agentrun.MessageSubagentResult] — a subagent's terminal result: a demoted
+//     subagent "result" line, or a terminal "task_notification" (background
+//     subagent completion)
+//   - [agentrun.MessageBackgroundTasks] — an authoritative snapshot of in-flight
+//     background subagent tasks (from "background_tasks_changed"), filtered to
+//     subagents (local_agent); the tracker's pending set
 //   - [agentrun.MessageError] — error events
 //
 // Note: [agentrun.MessageToolUse] is never emitted by this backend. Tool
-// invocations appear as tool_use blocks inside assistant messages, captured
-// in [agentrun.Message.Tool]. If an assistant message contains multiple
-// tool_use blocks, the last one wins (Message.Tool is singular).
+// invocations appear as tool_use blocks inside assistant messages. Every block
+// is captured in [agentrun.Message.Tools] (in order); [agentrun.Message.Tool]
+// holds the last one (last-one-wins, kept for backward compatibility).
 //
 // # Session Options
 //
