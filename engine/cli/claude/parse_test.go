@@ -1447,6 +1447,17 @@ func TestParseLine_SubagentResultUsageNilledOut(t *testing.T) {
 	if msg.Content != "done" {
 		t.Errorf("Content = %q, want %q", msg.Content, "done")
 	}
+	// This line came from within the subagent's own sidechain (ADR-4), so
+	// unlike a task_notification, Kind is provably BackgroundSubagent here.
+	if len(msg.Tasks) != 1 {
+		t.Fatalf("len(Tasks) = %d, want 1", len(msg.Tasks))
+	}
+	if msg.Tasks[0].ID != "toolu_abc" {
+		t.Errorf("Tasks[0].ID = %q, want %q", msg.Tasks[0].ID, "toolu_abc")
+	}
+	if msg.Tasks[0].Kind != agentrun.BackgroundSubagent {
+		t.Errorf("Tasks[0].Kind = %q, want %q", msg.Tasks[0].Kind, agentrun.BackgroundSubagent)
+	}
 }
 
 func TestIsSubagentEvent(t *testing.T) {

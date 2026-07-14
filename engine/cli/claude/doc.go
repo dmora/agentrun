@@ -35,8 +35,9 @@
 //     (background task completion; the completing task's kind is often
 //     unknowable from this notification alone — see the type's godoc)
 //   - [agentrun.MessageBackgroundTasks] — an authoritative snapshot of in-flight
-//     background subagent tasks (from "background_tasks_changed"), filtered to
-//     subagents (local_agent); the tracker's pending set
+//     background tasks (from "background_tasks_changed"). Message.Tasks carries
+//     every kind unconditionally (subagent and shell); Message.Tools remains
+//     filtered to subagents (local_agent) only — the tracker's pending set
 //   - [agentrun.MessageError] — error events
 //
 // When partial-message streaming is enabled (the default — see
