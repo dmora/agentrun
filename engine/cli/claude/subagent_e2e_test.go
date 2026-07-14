@@ -101,12 +101,11 @@ func TestE2E_Subagent_BackgroundRevive(t *testing.T) {
 	t.Logf("result-bearing Pending() sequence: %v", got)
 	// Parent results: #1 outstanding, #2 outstanding (revive), #3 quiescent.
 	// Interleaved MessageSubagentResult completions report the drained count.
-	var parentResults []int
 	// Recover just the three MessageResult pendings by replaying the known
 	// structure: results are the entries that follow snapshots draining/adding.
 	// Simplest robust check: the sequence must CONTAIN a non-quiescent value
 	// after the first drain (the revive), and END quiescent.
-	parentResults = got
+	parentResults := got
 	if len(parentResults) < 3 {
 		t.Fatalf("expected multiple result-bearing messages, got %v", got)
 	}
