@@ -1417,7 +1417,7 @@ func TestParseLine_SubagentResultUsageNilledOut(t *testing.T) {
 	b := New()
 	// Subagent result event (parent_tool_use_id set): the common case for any
 	// station that spawns a Task/Explore subagent. It must be demoted to a
-	// non-terminating MessageSubagentResult so it cannot end the parent turn
+	// non-terminating MessageTaskResult so it cannot end the parent turn
 	// (issue #57). Its Usage must be dropped so it does not inflate the parent's
 	// context-fill tracking, and the other result-only fields (StopReason,
 	// IsError, Denials) must be cleared so a subagent's outcome cannot leak onto
@@ -1428,8 +1428,8 @@ func TestParseLine_SubagentResultUsageNilledOut(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if msg.Type != agentrun.MessageSubagentResult {
-		t.Errorf("type = %q, want %q", msg.Type, agentrun.MessageSubagentResult)
+	if msg.Type != agentrun.MessageTaskResult {
+		t.Errorf("type = %q, want %q", msg.Type, agentrun.MessageTaskResult)
 	}
 	if msg.Usage != nil {
 		t.Errorf("subagent result Usage should be nil, got %+v", msg.Usage)
@@ -1446,6 +1446,17 @@ func TestParseLine_SubagentResultUsageNilledOut(t *testing.T) {
 	// Content is preserved so consumers still see the subagent's text.
 	if msg.Content != "done" {
 		t.Errorf("Content = %q, want %q", msg.Content, "done")
+	}
+	// This line came from within the subagent's own sidechain (ADR-4), so
+	// unlike a task_notification, Kind is provably BackgroundSubagent here.
+	if len(msg.Tasks) != 1 {
+		t.Fatalf("len(Tasks) = %d, want 1", len(msg.Tasks))
+	}
+	if msg.Tasks[0].ID != "toolu_abc" {
+		t.Errorf("Tasks[0].ID = %q, want %q", msg.Tasks[0].ID, "toolu_abc")
+	}
+	if msg.Tasks[0].Kind != agentrun.BackgroundSubagent {
+		t.Errorf("Tasks[0].Kind = %q, want %q", msg.Tasks[0].Kind, agentrun.BackgroundSubagent)
 	}
 }
 

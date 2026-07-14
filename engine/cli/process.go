@@ -24,6 +24,7 @@ type capabilities struct {
 	resumer   Resumer
 	streamer  Streamer
 	formatter InputFormatter
+	shellFeed bool // ShellFeedBackend presence; gates WithShellTracking, see scanLines
 }
 
 func resolveCapabilities(backend Backend) capabilities {
@@ -36,6 +37,9 @@ func resolveCapabilities(backend Backend) capabilities {
 	}
 	if f, ok := backend.(InputFormatter); ok {
 		caps.formatter = f
+	}
+	if _, ok := backend.(ShellFeedBackend); ok {
+		caps.shellFeed = true
 	}
 	return caps
 }
@@ -368,11 +372,17 @@ func (p *process) scanLines(ctx context.Context, stdout io.ReadCloser) error {
 
 	var lastStopReason agentrun.StopReason
 	var maxCallFill int
+	// trackShell is WithShellTracking gated by the backend's declared
+	// ShellFeedBackend capability (resolved once in Engine.Start): a backend
+	// with no native feed structurally cannot report non-subagent kinds, so
+	// the option must not activate tracking for it — see ShellFeedBackend.
+	trackShell := p.opts.ShellTracking && p.caps.shellFeed
 	// Loop-local, scoped to this subprocess. Nil (inert) unless the engine was
-	// configured with WithSubagentTools; a subprocess replacement starts a
-	// fresh tracker, which is correct — replacement kills any in-process
-	// subagents we were waiting on.
-	tracker := newSubagentTracker(p.opts.SubagentTools)
+	// configured with WithSubagentTools and/or WithShellTracking (backend
+	// capability permitting); a subprocess replacement starts a fresh
+	// tracker, which is correct — replacement kills any in-process
+	// background work we were waiting on.
+	tracker := newBackgroundTracker(p.opts.SubagentTools, trackShell)
 
 	for {
 		line, err := lr.ReadLineString()
@@ -446,9 +456,10 @@ func synthesizeContextWindow(msg agentrun.Message) *agentrun.Message {
 
 // enrichMessage applies engine-level enrichment to a parsed message:
 // error-boundary fill reset, stop-reason carry-forward, process metadata,
-// context fill tracking, result acknowledgement, and subagent tracking.
-// Returns updated (lastStopReason, maxCallFill) for the next iteration.
-func (p *process) enrichMessage(msg *agentrun.Message, lastStopReason agentrun.StopReason, maxCallFill int, tracker *subagentTracker) (agentrun.StopReason, int) {
+// context fill tracking, result acknowledgement, and background-task
+// tracking. Returns updated (lastStopReason, maxCallFill) for the next
+// iteration.
+func (p *process) enrichMessage(msg *agentrun.Message, lastStopReason agentrun.StopReason, maxCallFill int, tracker *backgroundTracker) (agentrun.StopReason, int) {
 	lastStopReason = applyStopReasonCarryForward(msg, lastStopReason)
 	if msg.Type == agentrun.MessageInit {
 		msg.Process = p.processMetaSnapshot()
@@ -457,12 +468,12 @@ func (p *process) enrichMessage(msg *agentrun.Message, lastStopReason agentrun.S
 	if msg.Type == agentrun.MessageResult {
 		p.awaitingResult.Store(false)
 	}
-	// Fold into the subagent pending set, then stamp the outcome on the two
-	// result-bearing types. observe-before-stamp so a completion's stamp
-	// reflects the post-removal count. Both are no-ops on a nil (inert)
-	// tracker, leaving Message.Subagents nil.
+	// Fold into the background-task pending set, then stamp the outcome on
+	// the two result-bearing types. observe-before-stamp so a completion's
+	// stamp reflects the post-removal count. Both are no-ops on a nil
+	// (inert) tracker, leaving Message.Background nil.
 	tracker.observe(msg)
-	if msg.Type == agentrun.MessageResult || msg.Type == agentrun.MessageSubagentResult {
+	if msg.Type == agentrun.MessageResult || msg.Type == agentrun.MessageTaskResult {
 		tracker.stamp(msg)
 	}
 	return lastStopReason, maxCallFill

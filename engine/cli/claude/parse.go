@@ -68,11 +68,11 @@ func (b *Backend) ParseLine(line string) (agentrun.Message, error) {
 	if isSubagentEvent(raw) {
 		msg.Usage = nil
 		// A subagent's terminal "result" line must not end the parent turn.
-		// Demote it to MessageSubagentResult so drainOutput waits for the
+		// Demote it to MessageTaskResult so drainOutput waits for the
 		// parent's own result (see issue #57). Only the parent's result
 		// (no parent_tool_use_id) reaches parseResultMessage as MessageResult.
 		if msg.Type == agentrun.MessageResult {
-			msg.Type = agentrun.MessageSubagentResult
+			msg.Type = agentrun.MessageTaskResult
 			// Strip the result-only fields parseResultMessage populated: a
 			// subagent's stop reason, error flag, and denials describe the
 			// subagent, not the parent turn. Leaving StopReason set is the
@@ -81,6 +81,17 @@ func (b *Backend) ParseLine(line string) (agentrun.Message, error) {
 			msg.StopReason = ""
 			msg.IsError = false
 			msg.Denials = nil
+			// This line came from within the subagent's own sidechain, so
+			// unlike a task_notification (ADR-4) the kind is never in
+			// question here: provably BackgroundSubagent. An id that
+			// sanitizes away yields no entry — same contract as snapshot
+			// parsing: a Tasks entry without an ID cannot be correlated.
+			if id := errfmt.SanitizeCode(msg.ParentToolUseID); id != "" {
+				msg.Tasks = []agentrun.BackgroundTask{{
+					ID:   id,
+					Kind: agentrun.BackgroundSubagent,
+				}}
+			}
 		}
 	}
 
@@ -147,11 +158,15 @@ func systemSubtypeSummary(subtype string, raw map[string]any) string {
 	}
 }
 
-// subagentTaskType is the Claude task_type that denotes a spawned subagent
-// (the Task/Agent tool). Background Bash tasks report "local_bash" and are
-// deliberately excluded from the subagent pending set — a station may leave a
-// long-running server task running, which would never quiesce.
-const subagentTaskType = "local_agent"
+// subagentTaskType and shellTaskType are the Claude task_type values with a
+// direct BackgroundKind correspondence (ADR-1): local_agent is a spawned
+// subagent (the Task/Agent tool), local_bash is a backgrounded shell command
+// (run_in_background). Any other task_type passes through sanitized under
+// its own tag — see backgroundTaskKind.
+const (
+	subagentTaskType = "local_agent"
+	shellTaskType    = "local_bash"
+)
 
 // terminalTaskStatuses are the task_notification statuses that mean a
 // background task has finished (as opposed to a progress update).
@@ -165,36 +180,64 @@ var terminalTaskStatuses = map[string]struct{}{
 	"stopped":   {},
 }
 
+// backgroundTaskKind maps a background_tasks_changed entry's task_type to a
+// BackgroundKind (ADR-1). local_agent and local_bash have a direct
+// correspondence; any other value (including empty — a future/unrecognized
+// CLI task type) passes through sanitized under its own tag. There is no
+// identity-erasing "other" bucket, so a new backend task type never requires
+// a change here.
+func backgroundTaskKind(taskType string) agentrun.BackgroundKind {
+	switch taskType {
+	case subagentTaskType:
+		return agentrun.BackgroundSubagent
+	case shellTaskType:
+		return agentrun.BackgroundShell
+	default:
+		return agentrun.BackgroundKind(errfmt.SanitizeCode(taskType))
+	}
+}
+
 // parseBackgroundTasks maps a "background_tasks_changed" event to
-// MessageBackgroundTasks, carrying one ToolCall per in-flight subagent task
-// (ID = task id) in Tools. Non-subagent tasks (e.g., local_bash) are filtered
-// out here so the generic tracker can treat the slice as the authoritative
-// subagent pending set. Tools is always non-nil (empty means the set drained).
+// MessageBackgroundTasks. Tasks (ADR-3) carries one kind-tagged
+// BackgroundTask per wire entry, unconditionally — no task_type is filtered
+// out here, so a bash-only snapshot is no longer indistinguishable from "no
+// work" (the wire-level bug this fixes). Tasks is always non-nil (empty
+// means the set drained).
+//
+// Tools is left unset — the Tools-as-pending-set overload this message type
+// used to carry is gone; cli.backgroundTracker (and any other consumer)
+// reads Tasks directly and filters by kind itself.
 func parseBackgroundTasks(raw map[string]any, msg *agentrun.Message) {
 	msg.Type = agentrun.MessageBackgroundTasks
 	tasks, _ := raw["tasks"].([]any)
-	out := make([]*agentrun.ToolCall, 0, len(tasks))
+	entries := make([]agentrun.BackgroundTask, 0, len(tasks))
 	for _, t := range tasks {
 		tm, ok := t.(map[string]any)
 		if !ok {
 			continue
 		}
-		if jsonutil.GetString(tm, "task_type") != subagentTaskType {
+		id := errfmt.SanitizeCode(jsonutil.GetString(tm, "task_id"))
+		if id == "" {
+			// An entry without an id cannot be correlated or removed later —
+			// skip it rather than emit a dead payload entry.
 			continue
 		}
-		if id := jsonutil.GetString(tm, "task_id"); id != "" {
-			out = append(out, &agentrun.ToolCall{ID: id})
-		}
+		entries = append(entries, agentrun.BackgroundTask{
+			ID:          id,
+			Kind:        backgroundTaskKind(jsonutil.GetString(tm, "task_type")),
+			Description: errfmt.Truncate(jsonutil.GetString(tm, "description")),
+		})
 	}
-	msg.Tools = out
+	msg.Tasks = entries
 }
 
 // parseTaskNotification maps a terminal "task_notification" (a background
-// subagent's completion, which never arrives as its own result line) to
-// MessageSubagentResult, correlating it via the notification's tool_use_id.
+// task's completion, which never arrives as its own result line) to
+// MessageTaskResult, correlating it via the notification's tool_use_id.
 // Non-terminal notifications stay plain system messages. task_notification
-// carries no task_type, so subagent scoping is handled downstream by the
-// tracker's idempotent remove (a non-subagent id was never in the set).
+// carries no task_type, so the completing task's kind is unknowable here;
+// downstream tracking scopes correctly anyway via the tracker's idempotent
+// remove (an id it never added is simply not in its set).
 func parseTaskNotification(raw map[string]any, msg *agentrun.Message) {
 	status := jsonutil.GetString(raw, "status")
 	if _, terminal := terminalTaskStatuses[status]; !terminal {
@@ -202,9 +245,18 @@ func parseTaskNotification(raw map[string]any, msg *agentrun.Message) {
 		msg.Content = jsonutil.GetString(raw, "message")
 		return
 	}
-	msg.Type = agentrun.MessageSubagentResult
+	msg.Type = agentrun.MessageTaskResult
 	msg.ParentToolUseID = jsonutil.GetString(raw, "tool_use_id")
 	msg.Content = jsonutil.GetString(raw, "summary")
+	// Tasks correlates by task_id (the snapshot's id-space, not tool_use_id)
+	// with Kind left empty: a terminal task_notification carries no task_type,
+	// so the completing task's kind is genuinely unknowable statelessly here
+	// (a finished shell task and a finished subagent are wire-identical) —
+	// see MessageTaskResult and ADR-4. An id that sanitizes away yields no
+	// entry — a Tasks entry without an ID cannot be correlated.
+	if id := errfmt.SanitizeCode(jsonutil.GetString(raw, "task_id")); id != "" {
+		msg.Tasks = []agentrun.BackgroundTask{{ID: id}}
+	}
 }
 
 // parseAssistantMessage handles "assistant" events with text and optional tool_use.

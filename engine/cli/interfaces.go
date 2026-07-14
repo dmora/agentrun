@@ -101,3 +101,28 @@ type InputFormatter interface {
 type BlockFormatter interface {
 	FormatInputBlocks(blocks []agentrun.ContentBlock) ([]byte, error)
 }
+
+// ShellFeedBackend is implemented by backends whose wire protocol emits a
+// native background-task feed (agentrun.MessageBackgroundTasks) covering
+// kinds beyond agentrun.BackgroundSubagent — e.g., Claude's
+// background_tasks_changed system event, which reports backgrounded shell
+// commands alongside subagents. Optional — the CLIEngine discovers it via
+// type assertion at Start, exactly like Resumer/Streamer/InputFormatter:
+//
+//	if _, ok := backend.(ShellFeedBackend); ok {
+//	    // backend's feed covers non-subagent kinds
+//	}
+//
+// This is the gate for WithShellTracking (see options.go): a backend that
+// does not implement ShellFeedBackend structurally cannot report
+// non-subagent kinds (no wire event ever arrives to observe), so the engine
+// never activates non-subagent tracking for it even when the option is set
+// — the option is still accepted, it simply has nothing to enable. Without
+// this gate, a feed-less backend would stamp a {0,0} for a kind it can never
+// actually observe, misreading as "tracked and quiescent" when the truth is
+// "unknown" (forbidden by agentrun.BackgroundStats's nil-vs-per-kind-absence
+// contract). Coverage must be declared by the backend, never inferred from
+// the consumer's option alone.
+type ShellFeedBackend interface {
+	ShellFeed() // marker method; only implementation presence is checked
+}

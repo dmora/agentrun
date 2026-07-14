@@ -40,9 +40,9 @@ type EngineOptions struct {
 	// SubagentTools is the set of parent-level tool names that spawn a
 	// subagent (e.g., "Task", "Agent"). It gates subagent tracking: when EMPTY
 	// (the default), the engine performs no tracking and never stamps
-	// Message.Subagents — today's behavior, byte-identical, with no linger
+	// Message.Background — today's behavior, byte-identical, with no linger
 	// signal for consumers. When non-empty, the engine tracks outstanding
-	// subagents and stamps SubagentStats on MessageResult/MessageSubagentResult.
+	// subagents and stamps BackgroundStats on MessageResult/MessageTaskResult.
 	//
 	// The names drive the name-based fallback path (add a pending id when a
 	// parent-level tool_use in this set is seen). Backends that emit a native
@@ -52,7 +52,15 @@ type EngineOptions struct {
 	// opt-in switch. Empty is deliberately the default so backends that
 	// coincidentally use a tool named "Task" are not tracked unless the caller
 	// explicitly opts in.
+	//
+	// Independent of ShellTracking — see WithShellTracking for the sibling
+	// switch that enables non-subagent background-task kinds.
 	SubagentTools map[string]struct{}
+
+	// ShellTracking gates tracking of shell and other non-subagent
+	// native-feed background-task kinds (agentrun.BackgroundShell and any
+	// raw pass-through kind tag). Defaults to false. See WithShellTracking.
+	ShellTracking bool
 }
 
 // EngineOption configures an Engine at construction time.
@@ -107,13 +115,14 @@ func WithStderrWriter(w io.Writer) EngineOption {
 
 // WithSubagentTools enables subagent tracking for parent-level tool calls
 // whose name is in the given set (e.g., "Task", "Agent"). With no names (or
-// only empty names) tracking stays OFF and Message.Subagents is never stamped
-// — the default. Repeated calls union the names. Blank names are ignored.
+// only empty names) tracking stays OFF and Message.Background is never
+// stamped — the default. Repeated calls union the names. Blank names are
+// ignored.
 //
 // Enable this only for backends that report subagent completion
-// (MessageSubagentResult) or a native background-task feed
+// (MessageTaskResult) or a native background-task feed
 // (MessageBackgroundTasks); otherwise a started subagent never decrements and
-// Pending() would stay positive forever.
+// its BackgroundSubagent TaskCounts.Pending() would stay positive forever.
 func WithSubagentTools(names ...string) EngineOption {
 	return func(o *EngineOptions) {
 		for _, n := range names {
@@ -125,6 +134,34 @@ func WithSubagentTools(names ...string) EngineOption {
 			}
 			o.SubagentTools[n] = struct{}{}
 		}
+	}
+}
+
+// WithShellTracking enables tracking of shell and other non-subagent
+// native-feed background-task kinds (e.g., agentrun.BackgroundShell)
+// reported via MessageBackgroundTasks. Off by default.
+//
+// Gates tracking only: Message.Tasks parsing is unconditional regardless of
+// this option (backends that support it always report every kind), and
+// enabling it never changes what the backend executes — a backgrounded
+// shell command runs whether or not its completion is tracked.
+//
+// Independent of WithSubagentTools: either may be set alone (a
+// shell-only-tracking consumer needs no subagent tool names) or together.
+//
+// Inert on backends with no native background-task feed (Codex, OpenCode,
+// ACP, agy): the engine gates this option on the backend's declared
+// cli.ShellFeedBackend capability (resolved once at Start via type
+// assertion, the same mechanism as Resumer/Streamer). A backend that does
+// not implement it structurally cannot report non-subagent kinds, so the
+// option is accepted but tracking never activates for it — no non-subagent
+// kind ever appears in Message.Background, not even a stamped {0,0}.
+//
+// Callers must pair a wait on agentrun.BackgroundShell with a timeout, never
+// an unconditional wait to zero — see agentrun.BackgroundShell.
+func WithShellTracking() EngineOption {
+	return func(o *EngineOptions) {
+		o.ShellTracking = true
 	}
 }
 

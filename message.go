@@ -32,53 +32,67 @@ const (
 	// Token usage and cost data are in Message.Usage.
 	MessageResult MessageType = "result"
 
-	// MessageSubagentResult is the terminal result of a subagent (e.g., the
-	// Task/Agent tool) nested inside the parent turn — NOT the parent turn's
+	// MessageTaskResult is the terminal result of a background task (e.g., a
+	// subagent spawned via the Task/Agent tool, or a backgrounded shell
+	// command) nested inside the parent turn — NOT the parent turn's
 	// completion.
 	//
-	// Two sources produce this type:
+	// Two sources produce this type, differing in how confidently the
+	// completing task's kind is known:
 	//   1. Demotion: a subagent's own "result" line (parent_tool_use_id set)
-	//      is demoted so it does not terminate the turn (issue #57).
-	//   2. Notification (Claude CLI): a background subagent never emits its own
+	//      is demoted so it does not terminate the turn (issue #57). The kind
+	//      is provably BackgroundSubagent — the line came from within the
+	//      subagent sidechain.
+	//   2. Notification (Claude CLI): a background task never emits its own
 	//      result line — its completion arrives as a separate system
-	//      "task_notification" with a terminal status. The Claude backend maps
-	//      that line to MessageSubagentResult with ParentToolUseID set to the
-	//      notification's tool_use_id, so background completions are visible to
-	//      the same consumers.
+	//      "task_notification" with a terminal status. This notification
+	//      carries no task type, so the completing task's kind is often
+	//      unknowable to the stateless parser: a finished test suite and a
+	//      finished subagent produce the identical shape. The Claude backend
+	//      maps the line to MessageTaskResult with ParentToolUseID set to the
+	//      notification's tool_use_id, so background completions are visible
+	//      to the same consumers regardless of kind.
 	//
 	// Either way this type does not terminate the turn: RunTurn/drainOutput
 	// stop only on the parent's own MessageResult. Consumers that watch for
 	// turn completion (e.g., filter.ResultOnly) should ignore this type.
 	//
 	// Field semantics on this message:
-	//   - Content: the subagent's result text or notification summary.
-	//   - ParentToolUseID: the completing subagent's correlation id.
-	//   - Subagents: outstanding subagent stats after this completion (when
-	//     tracking is enabled).
-	//   - Raw: the original event, for consumers needing per-subagent detail.
+	//   - Content: the task's result text or notification summary.
+	//   - ParentToolUseID: the completing task's correlation id.
+	//   - Tasks: always exactly one entry correlating the completing task by
+	//     ID — both sources populate it. Kind is BackgroundSubagent when
+	//     provably known (source 1 above), or empty when genuinely
+	//     unknowable (source 2 above): an empty Kind here means "unknown,"
+	//     never "absent." See Message.Tasks.
+	//   - Background: outstanding background-work stats after this completion
+	//     (when tracking is enabled).
+	//   - Raw: the original event, for consumers needing per-task detail.
 	//   - Usage, StopReason, IsError, Denials: cleared. These describe the
-	//     subagent, not the parent turn, and are dropped so they cannot leak
-	//     into the parent's turn accounting (StopReason in particular would
-	//     otherwise be carried forward onto the parent's real MessageResult).
-	MessageSubagentResult MessageType = "subagent_result"
+	//     completing task, not the parent turn, and are dropped so they cannot
+	//     leak into the parent's turn accounting (StopReason in particular
+	//     would otherwise be carried forward onto the parent's real
+	//     MessageResult).
+	MessageTaskResult MessageType = "task_result"
 
-	// MessageBackgroundTasks carries an authoritative snapshot of the backend's
-	// currently in-flight background subagent tasks, emitted every time that
-	// set changes. Tools holds one entry per in-flight task, with
-	// ToolCall.ID = the backend's task id; the slice is non-nil even when empty
-	// (an empty snapshot means the set drained to zero).
+	// MessageBackgroundTasks carries an authoritative snapshot of the
+	// backend's currently in-flight background tasks of every kind (see
+	// Tasks), emitted every time that set changes. Tasks is non-nil even
+	// when empty (an empty snapshot means the set drained to zero).
 	//
 	// Source:
 	//   - Claude CLI: synthesized from the native "background_tasks_changed"
-	//     system event, filtered to subagent tasks (task_type "local_agent");
-	//     background Bash tasks are excluded. This is the load-bearing
-	//     quiescence signal — it reports the true pending set across
-	//     auto-resume boundaries, including a subagent revived under a fresh
-	//     tool_use id (which name-based counting cannot see).
+	//     system event. Every task_type is parsed into Tasks unconditionally
+	//     (subagent, shell, and any other kind) — this is the load-bearing
+	//     quiescence signal, reporting the true pending set across
+	//     auto-resume boundaries, including a task revived under a fresh id
+	//     (which name-based counting cannot see).
 	//
 	// This type does not terminate a turn and carries no Usage/StopReason.
-	// Consumers that only care about turn completion should ignore it; subagent
-	// tracking consumes it as the authoritative pending set.
+	// Consumers that only care about turn completion should ignore it;
+	// background-task tracking (e.g., cli.WithSubagentTools,
+	// cli.WithShellTracking) consumes Tasks as the authoritative pending set
+	// per enabled kind.
 	MessageBackgroundTasks MessageType = "background_tasks"
 
 	// MessageContextWindow carries context window fill state emitted mid-turn.
@@ -160,24 +174,34 @@ type Message struct {
 	// in wire order. Tool remains the last entry for back-compat. This exists
 	// because a message may spawn several subagents at once (parallel fan-out):
 	// last-one-wins would undercount them. Nil when the message carries no
-	// tool_use blocks. On MessageBackgroundTasks messages, Tools instead
-	// carries one entry per in-flight background task (ToolCall.ID = task id).
+	// tool_use blocks. Not populated on MessageBackgroundTasks — see Tasks.
 	Tools []*ToolCall `json:"tools,omitempty"`
 
 	// ParentToolUseID is the id of the tool_use that owns this message, taken
 	// from the backend's parent_tool_use_id. Non-empty means the message
 	// originated inside a subagent sidechain (the value is the parent's spawn
 	// tool_use id); empty means a parent-session (top-level) event. On a
-	// MessageSubagentResult it is the completing subagent's correlation id —
-	// the key subagent tracking removes from its pending set.
+	// MessageTaskResult it is the completing task's correlation id — the key
+	// background tracking removes from its pending set.
 	ParentToolUseID string `json:"parent_tool_use_id,omitempty"`
 
-	// Subagents reports outstanding subagent work at the time this message was
-	// produced. Stamped on MessageResult and MessageSubagentResult, and only
-	// when subagent tracking is enabled (cli.WithSubagentTools). Nil means the
-	// backend does not track subagents — see SubagentStats for why nil differs
-	// from Pending()==0.
-	Subagents *SubagentStats `json:"subagents,omitempty"`
+	// Background reports outstanding background work at the time this message
+	// was produced, broken out per BackgroundKind. Stamped on MessageResult
+	// and MessageTaskResult, and only when the engine is configured to track
+	// that kind of background work (e.g., cli.WithSubagentTools,
+	// cli.WithShellTracking). Nil means the backend tracks nothing — see
+	// BackgroundStats for the full nil vs. per-kind-absence contract.
+	Background *BackgroundStats `json:"background,omitempty"`
+
+	// Tasks holds one entry per background task on a MessageBackgroundTasks
+	// snapshot — every tracked BackgroundKind, not filtered to any single
+	// kind — and, on MessageTaskResult, always exactly one entry correlating
+	// the completing task by ID (Kind set when provably known, empty when
+	// the backend's terminal notification carries no task type — an empty
+	// Kind means "unknown," not "absent"; see MessageTaskResult). Nil on
+	// every other message type, or when the backend does not populate this
+	// field at all.
+	Tasks []BackgroundTask `json:"tasks,omitempty"`
 
 	// Usage contains token usage data (typically on Text messages).
 	Usage *Usage `json:"usage,omitempty"`
@@ -268,7 +292,7 @@ type ToolCall struct {
 	// ID is the backend-assigned identifier of the tool_use content block
 	// (e.g., Claude's "toolu_..." id). Empty when the backend does not report
 	// a per-call id. Used to correlate a spawn with its later completion —
-	// subagent tracking keys the pending set on this id (see SubagentStats).
+	// background tracking keys the pending set on this id (see BackgroundStats).
 	ID string `json:"id,omitempty"`
 
 	// Input is the tool's input parameters as raw JSON.
@@ -278,49 +302,151 @@ type ToolCall struct {
 	Output json.RawMessage `json:"output,omitempty"`
 }
 
-// SubagentStats reports the parent turn's outstanding subagent work at the
-// moment a message was produced. It is stamped on MessageResult and
-// MessageSubagentResult when — and only when — the engine is configured to
-// track subagents (cli.WithSubagentTools with a non-empty set). A nil
-// Subagents field therefore means "this backend does not track subagents"
-// (the default), NOT "zero subagents": consumers must treat nil and
-// non-nil-with-Pending()==0 differently. This distinction is what lets a
-// consumer safely wait ("linger") for background subagents to quiesce only
-// on backends that can actually report quiescence.
+// BackgroundKind identifies the category of background work a task
+// represents. Output vocabulary (the StopReason pattern): backends map their
+// own task-type vocabulary onto the constants below where a clear
+// correspondence exists, and pass any other value through sanitized under its
+// own tag — there is no catch-all "other" bucket, so a new backend task type
+// never requires a change here.
 //
-// Per-backend matrix (mirrors the Denials field convention):
-//   - Claude CLI: populated when cli.WithSubagentTools is set. The pending
-//     set is driven authoritatively by the CLI's native background-task feed
-//     (MessageBackgroundTasks), with name-based tool_use counting as a
-//     fallback before the first native snapshot arrives.
-//   - Codex/OpenCode/agy/ACP: never populated (nil) — they neither emit the
-//     native feed nor the MessageSubagentResult demote, and crucible does not
-//     opt them into tracking.
-type SubagentStats struct {
-	// Started is the cumulative count of distinct subagents observed to start
-	// during the current subprocess. Resets only when a MessageInit's ResumeID
-	// differs from the one last observed; a same-session auto-resume re-init
-	// (identical ResumeID) does NOT reset — background tasks are exactly the
-	// state that must survive turn/auto-resume boundaries.
-	Started int `json:"started"`
+// Termination expectations differ sharply by kind — this is the reason the
+// type exists, and it drives which kinds a consumer may safely wait on to
+// quiescence versus which require a timeout. See BackgroundStats.
+type BackgroundKind string
 
-	// Finished is the cumulative count of subagents observed to complete.
-	Finished int `json:"finished"`
+const (
+	// BackgroundSubagent is a nested agent task (e.g., Claude's Task/Agent
+	// tool). Expected to terminate: a consumer may safely wait for a
+	// BackgroundSubagent count to drain to zero.
+	BackgroundSubagent BackgroundKind = "subagent"
 
-	// PendingIDs is a snapshot of the currently-outstanding subagent ids,
-	// capped at 32 entries (memory bound; the full count is Started-Finished).
-	PendingIDs []string `json:"pending_ids,omitempty"`
+	// BackgroundShell is a backgrounded shell command (e.g., a tool's
+	// run_in_background argument). MAY NEVER TERMINATE — a backgrounded dev
+	// server is wire-identical to a backgrounded test suite. A consumer MUST
+	// gate any wait on this kind with a timeout; never block on it reaching
+	// zero unconditionally.
+	BackgroundShell BackgroundKind = "shell"
+)
+
+// BackgroundTask describes one in-flight or just-completed background task,
+// as reported by the backend. Carried on Message.Tasks.
+type BackgroundTask struct {
+	// ID is the backend-assigned task identifier, used to correlate this
+	// entry across snapshots and with its eventual completion.
+	// Sanitized via errfmt.SanitizeCode (control chars rejected, 128-byte cap).
+	ID string `json:"id"`
+
+	// Kind categorizes the task. Empty means the backend reported a task
+	// type this parser could not classify.
+	// Sanitized via errfmt.SanitizeCode.
+	Kind BackgroundKind `json:"kind,omitempty"`
+
+	// Description is a human-readable, backend-supplied summary of the task
+	// (e.g., the shell command or subagent prompt). Carried only on the
+	// snapshot, never on the TaskCounts stats stamp — keeps the hot path
+	// small; a consumer that wants Description for policy decisions retains
+	// the last snapshot it observed.
+	// Sanitized via errfmt.Truncate (4096-byte cap).
+	Description string `json:"description,omitempty"`
 }
 
-// Pending returns the number of subagents that started but have not yet been
-// observed to finish. Zero means quiescent (all tracked subagents done);
-// a positive value means the parent turn ended while background work is still
-// in flight. Nil-safe: a nil receiver reports 0.
-func (s *SubagentStats) Pending() int {
+// TaskCounts reports one BackgroundKind's cumulative Started/Finished counts
+// and a capped view of its currently-outstanding task ids, at the moment a
+// message was produced.
+type TaskCounts struct {
+	// Kind identifies which BackgroundKind these counts describe.
+	Kind BackgroundKind `json:"kind"`
+
+	// Started is the cumulative count of distinct tasks of this kind observed
+	// to start during the current subprocess. Resets only when a MessageInit's
+	// ResumeID differs from the one last observed; a same-session auto-resume
+	// re-init (identical ResumeID) does NOT reset — background tasks are
+	// exactly the state that must survive turn/auto-resume boundaries.
+	Started int `json:"started"`
+
+	// Finished is the cumulative count of tasks of this kind observed to
+	// complete.
+	Finished int `json:"finished"`
+
+	// PendingIDs is a snapshot of this kind's currently-outstanding task ids,
+	// capped at 32 entries (memory bound; the full count is Started-Finished).
+	PendingIDs []string `json:"pending_ids,omitempty"` // capped 32 per kind
+}
+
+// Pending returns the number of this kind's tasks that started but have not
+// yet been observed to finish. Zero means quiescent for this kind; a positive
+// value means work of this kind is still outstanding.
+//
+// Value receiver: unlike the deleted SubagentStats.Pending, TaskCounts is a
+// plain value returned from BackgroundStats.Kind, never a pointer a caller
+// could fail to nil-check.
+//
+// BackgroundShell counts may legitimately never reach zero — see
+// BackgroundKind. A consumer waiting on Pending() for BackgroundShell MUST
+// pair the wait with a timeout.
+func (c TaskCounts) Pending() int {
+	return c.Started - c.Finished
+}
+
+// BackgroundStats reports outstanding background work at the moment a
+// message was produced, broken out per BackgroundKind. Stamped on
+// MessageResult and MessageTaskResult, and only when the engine is
+// configured to track background work.
+//
+// Per-backend matrix (mirrors the Denials field convention):
+//   - Claude CLI: BackgroundSubagent populated when cli.WithSubagentTools is
+//     set; BackgroundShell (and any other native-feed kind) populated when
+//     cli.WithShellTracking is set — the two switches are independent. Once
+//     the first native background-task feed snapshot (MessageBackgroundTasks)
+//     arrives it authoritatively drives every enabled kind; before that,
+//     BackgroundSubagent alone has a name-based tool_use fallback (shell
+//     tasks are native-feed-only, see BackgroundKind).
+//   - Codex/OpenCode/agy/ACP: never populated (nil) — they neither emit the
+//     native feed nor the MessageTaskResult demote, and crucible does not opt
+//     them into tracking. Enforced, not incidental: cli.WithShellTracking
+//     only activates on a backend that declares cli.ShellFeedBackend (type
+//     assertion at Start), so a caller enabling it on one of these backends
+//     gets no BackgroundShell entry at all, not even a stamped {0,0}.
+//
+// Nil differs from a tracked-but-empty kind, which itself differs from an
+// untracked kind — the v0.8.0 SubagentStats nil-vs-zero distinction, now
+// applied per kind:
+//   - A nil *BackgroundStats means this backend tracks no background work at
+//     all — consumers must treat nil and a non-nil struct differently before
+//     ever calling Kind.
+//   - A kind's ABSENCE from Kinds means that kind specifically is not tracked
+//     here — see Kind. A stamped TaskCounts{0,0} for a kind this engine
+//     cannot track is forbidden: it would read as "tracked and quiescent"
+//     when the truth is "unknown."
+//
+// Deliberately no union Pending() (or PendingTotal()) method. The shortest,
+// most obvious call on this type must not be the one that silently hangs a
+// consumer forever on a backgrounded dev server: summing every kind together
+// would let one never-terminating BackgroundShell entry poison an otherwise-
+// quiescent BackgroundSubagent count. A consumer that wants a combined view
+// must loop over Kinds explicitly (or call Kind one kind at a time), which
+// puts the never-quiesce hazard in plain sight at the call site instead of
+// hiding it behind a convenient helper.
+type BackgroundStats struct {
+	// Kinds holds one TaskCounts per BackgroundKind this engine tracks. A
+	// kind's absence from this slice means it is not tracked (see Kind) —
+	// distinct from a tracked kind whose TaskCounts happens to be {0,0}.
+	Kinds []TaskCounts `json:"kinds"`
+}
+
+// Kind looks up the TaskCounts for k, comma-ok style. ok is false when this
+// backend does not track k, in which case the returned TaskCounts is the
+// zero value and MUST NOT be treated as "quiescent" — see BackgroundStats.
+func (s *BackgroundStats) Kind(k BackgroundKind) (TaskCounts, bool) {
 	if s == nil {
-		return 0
+		return TaskCounts{}, false
 	}
-	return s.Started - s.Finished
+	for _, tc := range s.Kinds {
+		if tc.Kind == k {
+			return tc, true
+		}
+	}
+	return TaskCounts{}, false
 }
 
 // StopReason indicates why an agent's turn ended.

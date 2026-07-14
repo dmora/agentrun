@@ -39,3 +39,9 @@ type stubInputFormatter struct{}
 func (stubInputFormatter) FormatInput(_ string) ([]byte, error) { return nil, nil }
 
 var _ cli.InputFormatter = stubInputFormatter{}
+
+type stubShellFeedBackend struct{}
+
+func (stubShellFeedBackend) ShellFeed() {}
+
+var _ cli.ShellFeedBackend = stubShellFeedBackend{}
