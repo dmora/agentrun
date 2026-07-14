@@ -47,9 +47,22 @@ func TestParseLine(t *testing.T) {
 			},
 		},
 		{
-			name:    "agy_session sentinel is captured, not surfaced",
-			line:    `{"type":"agy_session","id":"d8e79181-5db2-4ea9-88e2-eea15ddab587"}`,
-			wantErr: cli.ErrSkipLine,
+			name: "agy_session sentinel becomes MessageInit with captured ResumeID",
+			line: `{"type":"agy_session","id":"d8e79181-5db2-4ea9-88e2-eea15ddab587"}`,
+			want: agentrun.Message{
+				Type:     agentrun.MessageInit,
+				ResumeID: "d8e79181-5db2-4ea9-88e2-eea15ddab587",
+			},
+		},
+		{
+			// Charset-valid (matches agy.go's sed capture, [0-9a-f-]) but not the
+			// canonical 36-char length: still consumed as plumbing (never leaks
+			// as MessageText), but not trustworthy enough to store as ResumeID.
+			name: "agy_session sentinel with non-canonical id is still consumed as plumbing",
+			line: `{"type":"agy_session","id":"d8e79181"}`,
+			want: agentrun.Message{
+				Type: agentrun.MessageInit,
+			},
 		},
 	}
 
@@ -73,6 +86,9 @@ func TestParseLine(t *testing.T) {
 			}
 			if got.StopReason != tc.want.StopReason {
 				t.Errorf("StopReason = %v, want %v", got.StopReason, tc.want.StopReason)
+			}
+			if got.ResumeID != tc.want.ResumeID {
+				t.Errorf("ResumeID = %v, want %v", got.ResumeID, tc.want.ResumeID)
 			}
 		})
 	}

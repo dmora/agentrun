@@ -1,13 +1,11 @@
 package agy
 
 import (
-	"errors"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/dmora/agentrun"
-	"github.com/dmora/agentrun/engine/cli"
 )
 
 func TestBackend_SpawnArgs(t *testing.T) {
@@ -80,10 +78,14 @@ func TestBackend_SpawnArgs_PureNoSideEffects(t *testing.T) {
 func TestBackend_ResumeArgs_CapturedID(t *testing.T) {
 	b := New()
 	// Simulate turn 1: the wrapper's agy_session sentinel is parsed, capturing
-	// the conversation ID.
+	// the conversation ID and surfacing it as MessageInit.
 	const id = "d8e79181-5db2-4ea9-88e2-eea15ddab587"
-	if _, err := b.ParseLine(`{"type":"agy_session","id":"` + id + `"}`); !errors.Is(err, cli.ErrSkipLine) {
-		t.Fatalf("agy_session sentinel: err = %v, want ErrSkipLine", err)
+	msg, err := b.ParseLine(`{"type":"agy_session","id":"` + id + `"}`)
+	if err != nil {
+		t.Fatalf("agy_session sentinel: unexpected error: %v", err)
+	}
+	if msg.Type != agentrun.MessageInit || msg.ResumeID != id {
+		t.Fatalf("agy_session sentinel: got Type=%v ResumeID=%q, want MessageInit/%q", msg.Type, msg.ResumeID, id)
 	}
 	if got := b.resumeID.Load(); got == nil || *got != id {
 		t.Fatalf("conversation ID not captured: %v", got)
@@ -100,6 +102,32 @@ func TestBackend_ResumeArgs_CapturedID(t *testing.T) {
 	assertContainsPair(t, agyArgs, "--conversation", id)
 	if agyArgs[len(agyArgs)-1] != "turn 2" {
 		t.Errorf("resume prompt not appended: %q", agyArgs)
+	}
+}
+
+// TestBackend_ResumeArgs_MalformedCapturedID guards the isConversationID split:
+// a structurally-recognized sentinel with a non-canonical id (charset-valid
+// per agy.go's sed capture, but not 36 chars) must still be consumed as
+// plumbing — never leaked as MessageText — but must not be trusted for
+// auto-resume.
+func TestBackend_ResumeArgs_MalformedCapturedID(t *testing.T) {
+	b := New()
+	msg, err := b.ParseLine(`{"type":"agy_session","id":"d8e79181"}`)
+	if err != nil {
+		t.Fatalf("agy_session sentinel: unexpected error: %v", err)
+	}
+	if msg.Type != agentrun.MessageInit {
+		t.Fatalf("agy_session sentinel with malformed id: Type = %v, want MessageInit", msg.Type)
+	}
+	if msg.ResumeID != "" {
+		t.Errorf("agy_session sentinel with malformed id: ResumeID = %q, want empty", msg.ResumeID)
+	}
+	if got := b.resumeID.Load(); got != nil {
+		t.Errorf("malformed id must not be stored: %v", *got)
+	}
+
+	if _, _, err := b.ResumeArgs(agentrun.Session{}, "msg"); err == nil {
+		t.Error("ResumeArgs after malformed id capture should still error (nothing usable was stored)")
 	}
 }
 

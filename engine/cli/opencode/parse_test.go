@@ -1,6 +1,7 @@
 package opencode
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -216,6 +217,44 @@ func TestParseLine_ToolUse_NoPart(t *testing.T) {
 	}
 }
 
+func TestParseLine_ToolUseCallID(t *testing.T) {
+	b := New()
+	msg, err := b.ParseLine(`{"type":"tool_use","timestamp":1700000000000,"part":{"tool":"bash","callID":"SW8765SLMV2JYteP","state":{"input":"ls","output":"ok","status":"completed"}}}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Tool == nil {
+		t.Fatal("Tool is nil")
+	}
+	if msg.Tool.ID != "SW8765SLMV2JYteP" {
+		t.Errorf("Tool.ID = %q, want %q", msg.Tool.ID, "SW8765SLMV2JYteP")
+	}
+}
+
+func TestParseLine_ToolUseError(t *testing.T) {
+	b := New()
+	msg, err := b.ParseLine(`{"type":"tool_use","timestamp":1700000000000,"part":{"tool":"bash","state":{"status":"error","error":"permission denied"}}}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Tool == nil {
+		t.Fatal("Tool is nil")
+	}
+	// The error-state shape has no "output" key (only "error") — the error
+	// must surface on both Tool.Output and Content, or a failed tool call
+	// leaves no failure signal anywhere on the Message.
+	var output string
+	if err := json.Unmarshal(msg.Tool.Output, &output); err != nil {
+		t.Fatalf("unmarshal Tool.Output: %v", err)
+	}
+	if output != "permission denied" {
+		t.Errorf("Tool.Output = %q, want %q", output, "permission denied")
+	}
+	if msg.Content != "permission denied" {
+		t.Errorf("Content = %q, want %q", msg.Content, "permission denied")
+	}
+}
+
 // --- step_finish ---
 
 func TestParseLine_StepFinish(t *testing.T) {
@@ -260,6 +299,86 @@ func TestParseLine_StepFinish_InputTokensContract(t *testing.T) {
 	}
 	if msg.Usage == nil || msg.Usage.InputTokens <= 0 {
 		t.Error("InputTokens must be populated for context-window monitoring")
+	}
+}
+
+func TestParseLine_StepFinishToolCalls(t *testing.T) {
+	b := New()
+	msg, err := b.ParseLine(`{"type":"step_finish","timestamp":1700000000000,"part":{"reason":"tool-calls","tokens":{"input":100,"output":20}}}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// A "tool-calls" step_finish is mid-turn, not turn completion — mapping
+	// it to MessageResult stops RunTurn's drain before the turn is done.
+	if msg.Type == agentrun.MessageResult {
+		t.Errorf("Type = %q, want non-terminal (tool-calls does not end the turn)", msg.Type)
+	}
+	// Usage must stay nil here: engine/cli's generic context-fill enrichment
+	// treats Usage on any non-result message as a trustworthy per-call
+	// context-fill sample and would synthesize a MessageContextWindow from
+	// it — silently enabling context-fill tracking for OpenCode, which
+	// CLAUDE.md documents as unsupported (usage only reported on the result
+	// event). The raw tokens remain available via msg.Raw.
+	if msg.Usage != nil {
+		t.Errorf("Usage = %+v, want nil (see parseStepFinish comment)", msg.Usage)
+	}
+	// StopReason is exclusive to MessageResult (see Message.StopReason doc).
+	if msg.StopReason != "" {
+		t.Errorf("StopReason = %q, want empty", msg.StopReason)
+	}
+}
+
+func TestParseLine_StepFinishStop(t *testing.T) {
+	b := New()
+	msg, err := b.ParseLine(`{"type":"step_finish","timestamp":1700000000000,"part":{"reason":"stop","tokens":{"input":150,"output":40}}}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Type != agentrun.MessageResult {
+		t.Errorf("Type = %q, want %q", msg.Type, agentrun.MessageResult)
+	}
+	if msg.StopReason != agentrun.StopEndTurn {
+		t.Errorf("StopReason = %q, want %q", msg.StopReason, agentrun.StopEndTurn)
+	}
+}
+
+func TestParseLine_StepFinishCostAndReasoning(t *testing.T) {
+	b := New()
+	msg, err := b.ParseLine(`{"type":"step_finish","timestamp":1700000000000,"part":{"cost":0.015494,"tokens":{"total":1834,"input":1500,"output":200,"reasoning":134,"cache":{"read":0,"write":0}}}}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Usage == nil {
+		t.Fatal("Usage is nil")
+	}
+	if msg.Usage.CostUSD != 0.015494 {
+		t.Errorf("CostUSD = %v, want %v", msg.Usage.CostUSD, 0.015494)
+	}
+	if msg.Usage.ThinkingTokens != 134 {
+		t.Errorf("ThinkingTokens = %d, want %d", msg.Usage.ThinkingTokens, 134)
+	}
+	if msg.Usage.CacheReadTokens != 0 || msg.Usage.CacheWriteTokens != 0 {
+		t.Errorf("CacheReadTokens/CacheWriteTokens = %d/%d, want 0/0", msg.Usage.CacheReadTokens, msg.Usage.CacheWriteTokens)
+	}
+}
+
+// TestParseLine_StepFinishCacheTokens uses non-zero cache values (the live
+// fixture above happens to carry zeros) so a broken tokens.cache read path
+// would actually fail this test.
+func TestParseLine_StepFinishCacheTokens(t *testing.T) {
+	b := New()
+	msg, err := b.ParseLine(`{"type":"step_finish","timestamp":1700000000000,"part":{"tokens":{"input":1500,"output":200,"cache":{"read":300,"write":75}}}}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Usage == nil {
+		t.Fatal("Usage is nil")
+	}
+	if msg.Usage.CacheReadTokens != 300 {
+		t.Errorf("CacheReadTokens = %d, want %d", msg.Usage.CacheReadTokens, 300)
+	}
+	if msg.Usage.CacheWriteTokens != 75 {
+		t.Errorf("CacheWriteTokens = %d, want %d", msg.Usage.CacheWriteTokens, 75)
 	}
 }
 
@@ -350,6 +469,74 @@ func TestParseLine_Error_ControlCharCode(t *testing.T) {
 	}
 	if msg.ErrorCode != "" {
 		t.Errorf("ErrorCode = %q, want empty (control char rejection)", msg.ErrorCode)
+	}
+}
+
+// --- RunTurn integration (step_finish reason handling) ---
+
+// fakeTurnProcess is a minimal agentrun.Process backed by a pre-filled,
+// closed channel of already-parsed messages. It drives the real
+// agentrun.RunTurn draining logic against ParseLine's output without a
+// subprocess, so a multi-event turn can be replayed deterministically.
+type fakeTurnProcess struct {
+	output chan agentrun.Message
+}
+
+func (p *fakeTurnProcess) Output() <-chan agentrun.Message        { return p.output }
+func (p *fakeTurnProcess) Send(_ context.Context, _ string) error { return nil }
+func (p *fakeTurnProcess) Stop(_ context.Context) error           { return nil }
+func (p *fakeTurnProcess) Wait() error                            { return nil }
+func (p *fakeTurnProcess) Err() error                             { return nil }
+
+// TestRunTurn_StepFinishToolCallsDoesNotEndTurn replays a realistic
+// tool-using turn — text, a tool call, a "tool-calls" step_finish, more
+// text, then the final "stop" step_finish — through ParseLine and drives it
+// with the real RunTurn. Before the fix, the "tool-calls" step_finish was
+// mapped to MessageResult and RunTurn stopped there, silently truncating
+// the rest of the turn.
+func TestRunTurn_StepFinishToolCallsDoesNotEndTurn(t *testing.T) {
+	b := New()
+	lines := []string{
+		`{"type":"step_start","timestamp":1700000000000,"sessionID":"ses_abcdefghij1234567890"}`,
+		`{"type":"text","timestamp":1700000000000,"part":{"text":"Let me check that"}}`,
+		`{"type":"tool_use","timestamp":1700000000000,"part":{"tool":"bash","state":{"input":"ls","output":"file.txt","status":"completed"}}}`,
+		`{"type":"step_finish","timestamp":1700000000000,"part":{"reason":"tool-calls","tokens":{"input":100,"output":20}}}`,
+		`{"type":"text","timestamp":1700000000000,"part":{"text":"Here is the final answer"}}`,
+		`{"type":"step_finish","timestamp":1700000000000,"part":{"reason":"stop","tokens":{"input":150,"output":40}}}`,
+	}
+
+	proc := &fakeTurnProcess{output: make(chan agentrun.Message, len(lines))}
+	for _, line := range lines {
+		msg, err := b.ParseLine(line)
+		if err != nil {
+			t.Fatalf("ParseLine(%q): %v", line, err)
+		}
+		proc.output <- msg
+	}
+	close(proc.output)
+
+	var received []agentrun.Message
+	err := agentrun.RunTurn(context.Background(), proc, "ignored", func(m agentrun.Message) error {
+		received = append(received, m)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+	if len(received) != len(lines) {
+		t.Fatalf("RunTurn delivered %d messages, want %d (drain stopped early)", len(received), len(lines))
+	}
+	for i, m := range received[:len(received)-1] {
+		if m.Type == agentrun.MessageResult {
+			t.Errorf("message %d has Type %q; only the final step_finish should be MessageResult", i, m.Type)
+		}
+	}
+	final := received[len(received)-1]
+	if final.Type != agentrun.MessageResult {
+		t.Fatalf("final message Type = %q, want %q", final.Type, agentrun.MessageResult)
+	}
+	if final.StopReason != agentrun.StopEndTurn {
+		t.Errorf("final StopReason = %q, want %q", final.StopReason, agentrun.StopEndTurn)
 	}
 }
 

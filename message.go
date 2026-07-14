@@ -298,7 +298,10 @@ type ToolCall struct {
 //     opt them into tracking.
 type SubagentStats struct {
 	// Started is the cumulative count of distinct subagents observed to start
-	// during the current subprocess (reset on MessageInit).
+	// during the current subprocess. Resets only when a MessageInit's ResumeID
+	// differs from the one last observed; a same-session auto-resume re-init
+	// (identical ResumeID) does NOT reset — background tasks are exactly the
+	// state that must survive turn/auto-resume boundaries.
 	Started int `json:"started"`
 
 	// Finished is the cumulative count of subagents observed to complete.
@@ -408,8 +411,9 @@ type Usage struct {
 // InitMeta carries metadata from the agent's initialization handshake.
 // Set exclusively on MessageInit messages. Nil on all other message types.
 //
-// Not all backends populate every field — AgentName and AgentVersion are
-// currently only populated by ACP backends. Consumers should check
+// Not all backends populate every field — AgentName is currently only
+// populated by ACP backends; AgentVersion is populated by ACP backends and
+// by Claude CLI (from claude_code_version). Consumers should check
 // individual fields rather than assuming non-nil InitMeta means all
 // fields are present.
 //
@@ -431,7 +435,7 @@ type InitMeta struct {
 
 	// AgentVersion is the agent implementation's version string.
 	// Empty means the backend did not report a version.
-	// Currently populated by ACP backends only.
+	// Populated by ACP backends and by Claude CLI (from claude_code_version).
 	// Sanitized: control chars rejected, truncated to 128 bytes at parse time.
 	AgentVersion string `json:"agent_version,omitempty"`
 }

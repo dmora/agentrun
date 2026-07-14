@@ -171,6 +171,27 @@ func TestParseLine_TaskNotificationTerminal_MapsToSubagentResult(t *testing.T) {
 	}
 }
 
+func TestParseLine_TaskNotificationStopped_MapsToSubagentResult(t *testing.T) {
+	b := New()
+	// "stopped" is the status Claude reports for a background task cancelled
+	// at shutdown — must be treated as terminal, same as "completed".
+	line := `{"type":"system","subtype":"task_notification","task_id":"a6b3f55a",` +
+		`"tool_use_id":"toolu_spawn","status":"stopped","summary":"cancelled at shutdown"}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Type != agentrun.MessageSubagentResult {
+		t.Fatalf("Type = %q, want %q", msg.Type, agentrun.MessageSubagentResult)
+	}
+	if msg.ParentToolUseID != "toolu_spawn" {
+		t.Errorf("ParentToolUseID = %q, want %q", msg.ParentToolUseID, "toolu_spawn")
+	}
+	if msg.Content != "cancelled at shutdown" {
+		t.Errorf("Content = %q, want %q", msg.Content, "cancelled at shutdown")
+	}
+}
+
 func TestParseLine_TaskNotificationNonTerminal_StaysSystem(t *testing.T) {
 	b := New()
 	// A progress-style notification must not be treated as a completion.

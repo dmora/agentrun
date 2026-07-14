@@ -20,6 +20,7 @@ const (
 	testBinary         = "/usr/local/bin/claude"
 	testToolName       = "Read"
 	testThinkingBudget = "10000"
+	testAgentVersion   = "2.1.204"
 )
 
 // --- Constructor tests ---

@@ -199,13 +199,18 @@ func extractToolOutput(d toolCallUpdate) json.RawMessage {
 	return nil
 }
 
-// extractContentText parses the ACP content block array and returns the
-// first text value, or "" if the array is absent/empty/unparseable.
+// extractContentText parses the ACP ToolCallContent array — a discriminated
+// union on each block's own "type" ("content", "diff", "terminal") — and
+// concatenates the text of every "content"-type block, joined with "\n".
+// Non-"content" blocks (diff, terminal) carry no text and are skipped.
+// Returns "" if the array is absent/empty/unparseable or no block
+// contributes text.
 func extractContentText(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
 	}
 	var blocks []struct {
+		Type    string `json:"type"`
 		Content struct {
 			Text string `json:"text"`
 		} `json:"content"`
@@ -213,7 +218,17 @@ func extractContentText(raw json.RawMessage) string {
 	if err := json.Unmarshal(raw, &blocks); err != nil || len(blocks) == 0 {
 		return ""
 	}
-	return blocks[0].Content.Text
+	var b strings.Builder
+	for _, blk := range blocks {
+		if blk.Type != "content" || blk.Content.Text == "" {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(blk.Content.Text)
+	}
+	return b.String()
 }
 
 // --- Plan ---
