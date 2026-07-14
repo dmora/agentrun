@@ -83,11 +83,15 @@ func (b *Backend) ParseLine(line string) (agentrun.Message, error) {
 			msg.Denials = nil
 			// This line came from within the subagent's own sidechain, so
 			// unlike a task_notification (ADR-4) the kind is never in
-			// question here: provably BackgroundSubagent.
-			msg.Tasks = []agentrun.BackgroundTask{{
-				ID:   errfmt.SanitizeCode(msg.ParentToolUseID),
-				Kind: agentrun.BackgroundSubagent,
-			}}
+			// question here: provably BackgroundSubagent. An id that
+			// sanitizes away yields no entry — same contract as snapshot
+			// parsing: a Tasks entry without an ID cannot be correlated.
+			if id := errfmt.SanitizeCode(msg.ParentToolUseID); id != "" {
+				msg.Tasks = []agentrun.BackgroundTask{{
+					ID:   id,
+					Kind: agentrun.BackgroundSubagent,
+				}}
+			}
 		}
 	}
 
@@ -248,8 +252,11 @@ func parseTaskNotification(raw map[string]any, msg *agentrun.Message) {
 	// with Kind left empty: a terminal task_notification carries no task_type,
 	// so the completing task's kind is genuinely unknowable statelessly here
 	// (a finished shell task and a finished subagent are wire-identical) —
-	// see MessageTaskResult and ADR-4.
-	msg.Tasks = []agentrun.BackgroundTask{{ID: errfmt.SanitizeCode(jsonutil.GetString(raw, "task_id"))}}
+	// see MessageTaskResult and ADR-4. An id that sanitizes away yields no
+	// entry — a Tasks entry without an ID cannot be correlated.
+	if id := errfmt.SanitizeCode(jsonutil.GetString(raw, "task_id")); id != "" {
+		msg.Tasks = []agentrun.BackgroundTask{{ID: id}}
+	}
 }
 
 // parseAssistantMessage handles "assistant" events with text and optional tool_use.

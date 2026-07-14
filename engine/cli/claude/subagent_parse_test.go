@@ -146,6 +146,42 @@ func TestParseLine_BackgroundTasksChanged_MixedKinds(t *testing.T) {
 	}
 }
 
+func TestParseLine_TaskNotification_NoTasksEntryWithoutID(t *testing.T) {
+	b := New()
+	// A terminal notification whose task_id is absent (or sanitizes away)
+	// must not stamp an ID-less Tasks entry — it cannot be correlated.
+	line := `{"type":"system","subtype":"task_notification",` +
+		`"tool_use_id":"toolu_spawn","status":"completed","summary":"done"}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Type != agentrun.MessageTaskResult {
+		t.Fatalf("Type = %q, want %q", msg.Type, agentrun.MessageTaskResult)
+	}
+	if msg.Tasks != nil {
+		t.Errorf("Tasks = %v, want nil (no correlatable id)", msg.Tasks)
+	}
+}
+
+func TestParseLine_SubagentDemote_NoTasksEntryWhenIDSanitizesAway(t *testing.T) {
+	b := New()
+	// A demoted subagent result whose parent_tool_use_id is control-char
+	// garbage (SanitizeCode rejects it) must not stamp an ID-less entry.
+	line := `{"type":"result","subtype":"success","result":"sub done",` +
+		`"parent_tool_use_id":"\u0001\u0002"}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Type != agentrun.MessageTaskResult {
+		t.Fatalf("Type = %q, want %q (demoted)", msg.Type, agentrun.MessageTaskResult)
+	}
+	if msg.Tasks != nil {
+		t.Errorf("Tasks = %v, want nil (id sanitized away)", msg.Tasks)
+	}
+}
+
 func TestParseLine_BackgroundTasksChanged_SkipsEntriesWithoutID(t *testing.T) {
 	b := New()
 	// A task whose task_id is absent (or sanitizes to empty) cannot be
