@@ -73,23 +73,24 @@ const (
 	//     MessageResult).
 	MessageTaskResult MessageType = "task_result"
 
-	// MessageBackgroundTasks carries an authoritative snapshot of the backend's
-	// currently in-flight background subagent tasks, emitted every time that
-	// set changes. Tools holds one entry per in-flight task, with
-	// ToolCall.ID = the backend's task id; the slice is non-nil even when empty
-	// (an empty snapshot means the set drained to zero).
+	// MessageBackgroundTasks carries an authoritative snapshot of the
+	// backend's currently in-flight background tasks of every kind (see
+	// Tasks), emitted every time that set changes. Tasks is non-nil even
+	// when empty (an empty snapshot means the set drained to zero).
 	//
 	// Source:
 	//   - Claude CLI: synthesized from the native "background_tasks_changed"
-	//     system event, filtered to subagent tasks (task_type "local_agent");
-	//     background Bash tasks are excluded. This is the load-bearing
-	//     quiescence signal — it reports the true pending set across
-	//     auto-resume boundaries, including a subagent revived under a fresh
-	//     tool_use id (which name-based counting cannot see).
+	//     system event. Every task_type is parsed into Tasks unconditionally
+	//     (subagent, shell, and any other kind) — this is the load-bearing
+	//     quiescence signal, reporting the true pending set across
+	//     auto-resume boundaries, including a task revived under a fresh id
+	//     (which name-based counting cannot see).
 	//
 	// This type does not terminate a turn and carries no Usage/StopReason.
-	// Consumers that only care about turn completion should ignore it; subagent
-	// tracking consumes it as the authoritative pending set.
+	// Consumers that only care about turn completion should ignore it;
+	// background-task tracking (e.g., cli.WithSubagentTools,
+	// cli.WithShellTracking) consumes Tasks as the authoritative pending set
+	// per enabled kind.
 	MessageBackgroundTasks MessageType = "background_tasks"
 
 	// MessageContextWindow carries context window fill state emitted mid-turn.
@@ -171,8 +172,7 @@ type Message struct {
 	// in wire order. Tool remains the last entry for back-compat. This exists
 	// because a message may spawn several subagents at once (parallel fan-out):
 	// last-one-wins would undercount them. Nil when the message carries no
-	// tool_use blocks. On MessageBackgroundTasks messages, Tools instead
-	// carries one entry per in-flight background task (ToolCall.ID = task id).
+	// tool_use blocks. Not populated on MessageBackgroundTasks — see Tasks.
 	Tools []*ToolCall `json:"tools,omitempty"`
 
 	// ParentToolUseID is the id of the tool_use that owns this message, taken

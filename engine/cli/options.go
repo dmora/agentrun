@@ -52,7 +52,15 @@ type EngineOptions struct {
 	// opt-in switch. Empty is deliberately the default so backends that
 	// coincidentally use a tool named "Task" are not tracked unless the caller
 	// explicitly opts in.
+	//
+	// Independent of ShellTracking — see WithShellTracking for the sibling
+	// switch that enables non-subagent background-task kinds.
 	SubagentTools map[string]struct{}
+
+	// ShellTracking gates tracking of shell and other non-subagent
+	// native-feed background-task kinds (agentrun.BackgroundShell and any
+	// raw pass-through kind tag). Defaults to false. See WithShellTracking.
+	ShellTracking bool
 }
 
 // EngineOption configures an Engine at construction time.
@@ -126,6 +134,30 @@ func WithSubagentTools(names ...string) EngineOption {
 			}
 			o.SubagentTools[n] = struct{}{}
 		}
+	}
+}
+
+// WithShellTracking enables tracking of shell and other non-subagent
+// native-feed background-task kinds (e.g., agentrun.BackgroundShell)
+// reported via MessageBackgroundTasks. Off by default.
+//
+// Gates tracking only: Message.Tasks parsing is unconditional regardless of
+// this option (backends that support it always report every kind), and
+// enabling it never changes what the backend executes — a backgrounded
+// shell command runs whether or not its completion is tracked.
+//
+// Independent of WithSubagentTools: either may be set alone (a
+// shell-only-tracking consumer needs no subagent tool names) or together.
+//
+// Inert on backends with no native background-task feed (Codex, OpenCode,
+// ACP, agy): the option is accepted but there is nothing for it to observe,
+// so no non-subagent kind ever appears in Message.Background.
+//
+// Callers must pair a wait on agentrun.BackgroundShell with a timeout, never
+// an unconditional wait to zero — see agentrun.BackgroundShell.
+func WithShellTracking() EngineOption {
+	return func(o *EngineOptions) {
+		o.ShellTracking = true
 	}
 }
 

@@ -194,42 +194,30 @@ func backgroundTaskKind(taskType string) agentrun.BackgroundKind {
 }
 
 // parseBackgroundTasks maps a "background_tasks_changed" event to
-// MessageBackgroundTasks.
+// MessageBackgroundTasks. Tasks (ADR-3) carries one kind-tagged
+// BackgroundTask per wire entry, unconditionally — no task_type is filtered
+// out here, so a bash-only snapshot is no longer indistinguishable from "no
+// work" (the wire-level bug this fixes). Tasks is always non-nil (empty
+// means the set drained).
 //
-// Tasks (ADR-3) carries one kind-tagged BackgroundTask per wire entry,
-// unconditionally — no task_type is filtered out here, so a bash-only
-// snapshot is no longer indistinguishable from "no work" (the wire-level bug
-// this stage fixes). Tasks is always non-nil (empty means the set drained).
-//
-// Tools is TEMPORARILY still populated with the subagent-only, ID-only
-// entries exactly as before parsing was made kind-aware: the stage-3 tracker
-// still consumes Tools as its authoritative pending set. This is transitional
-// and will be removed once the tracker migrates onto Tasks.
+// Tools is left unset — the Tools-as-pending-set overload this message type
+// used to carry is gone; cli.backgroundTracker (and any other consumer)
+// reads Tasks directly and filters by kind itself.
 func parseBackgroundTasks(raw map[string]any, msg *agentrun.Message) {
 	msg.Type = agentrun.MessageBackgroundTasks
 	tasks, _ := raw["tasks"].([]any)
-	tools := make([]*agentrun.ToolCall, 0, len(tasks))
 	entries := make([]agentrun.BackgroundTask, 0, len(tasks))
 	for _, t := range tasks {
 		tm, ok := t.(map[string]any)
 		if !ok {
 			continue
 		}
-		taskType := jsonutil.GetString(tm, "task_type")
-		id := jsonutil.GetString(tm, "task_id")
-
 		entries = append(entries, agentrun.BackgroundTask{
-			ID:          errfmt.SanitizeCode(id),
-			Kind:        backgroundTaskKind(taskType),
+			ID:          errfmt.SanitizeCode(jsonutil.GetString(tm, "task_id")),
+			Kind:        backgroundTaskKind(jsonutil.GetString(tm, "task_type")),
 			Description: errfmt.Truncate(jsonutil.GetString(tm, "description")),
 		})
-
-		// TEMPORARY: Tools stays subagent-filtered, ID-only (see doc comment).
-		if taskType == subagentTaskType && id != "" {
-			tools = append(tools, &agentrun.ToolCall{ID: id})
-		}
 	}
-	msg.Tools = tools
 	msg.Tasks = entries
 }
 

@@ -138,21 +138,19 @@ func TestParseLine_BackgroundTasksChanged_MixedKinds(t *testing.T) {
 		}
 	}
 
-	// Tools (transitional — see parseBackgroundTasks): still subagent-only,
-	// ID-only. The stage-3 tracker still reads this as its pending set.
-	if len(msg.Tools) != 1 {
-		t.Fatalf("len(Tools) = %d, want 1 (local_bash filtered out of Tools)", len(msg.Tools))
-	}
-	if msg.Tools[0].ID != "a9ee0ce61d88b6ef6" {
-		t.Errorf("Tools[0].ID = %q, want %q", msg.Tools[0].ID, "a9ee0ce61d88b6ef6")
+	// Tools is no longer populated for this message type — the tracker now
+	// consumes Tasks directly and filters by kind itself (the Tools-as-
+	// pending-set overload this type used to carry is gone).
+	if msg.Tools != nil {
+		t.Errorf("Tools = %+v, want nil (no longer populated on MessageBackgroundTasks)", msg.Tools)
 	}
 }
 
 func TestParseLine_BackgroundTasksChanged_EmptyIsNonNil(t *testing.T) {
 	b := New()
 	// Drained set, real wire shape (testdata/backgroundtask/streaming.jsonl:15).
-	// Both Tools and Tasks must be non-nil-but-empty so the tracker treats
-	// this as an authoritative "zero pending" snapshot, not "no snapshot".
+	// Tasks must be non-nil-but-empty so the tracker treats this as an
+	// authoritative "zero pending" snapshot, not "no snapshot".
 	line := `{"type":"system","subtype":"background_tasks_changed","tasks":[],` +
 		`"uuid":"a9a222f7-0845-4d73-84b0-28ab38fcd789","session_id":"67794e8a-a51c-477a-8018-188014895e61"}`
 	msg, err := b.ParseLine(line)
@@ -161,12 +159,6 @@ func TestParseLine_BackgroundTasksChanged_EmptyIsNonNil(t *testing.T) {
 	}
 	if msg.Type != agentrun.MessageBackgroundTasks {
 		t.Fatalf("Type = %q, want %q", msg.Type, agentrun.MessageBackgroundTasks)
-	}
-	if msg.Tools == nil {
-		t.Error("Tools must be non-nil (empty snapshot), got nil")
-	}
-	if len(msg.Tools) != 0 {
-		t.Errorf("len(Tools) = %d, want 0", len(msg.Tools))
 	}
 	if msg.Tasks == nil {
 		t.Error("Tasks must be non-nil (empty snapshot), got nil")
@@ -194,10 +186,6 @@ func TestParseLine_BackgroundTasksChanged_UnknownTaskTypePassthrough(t *testing.
 	}
 	if msg.Tasks[0].Kind != agentrun.BackgroundKind("local_web_fetch") {
 		t.Errorf("Tasks[0].Kind = %q, want %q (sanitized passthrough)", msg.Tasks[0].Kind, "local_web_fetch")
-	}
-	// Not the subagent task_type: excluded from the transitional Tools view.
-	if len(msg.Tools) != 0 {
-		t.Errorf("len(Tools) = %d, want 0 (unknown kind stays out of Tools)", len(msg.Tools))
 	}
 }
 
