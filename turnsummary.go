@@ -22,8 +22,9 @@ type TurnSummary struct {
 	// Captured from every Tools entry when present (a single message may
 	// carry several tool_use blocks — parallel fan-out), falling back to
 	// the single Tool field (MessageToolUse, or Claude CLI embedding a
-	// tool call in MessageText/MessageThinking). MessageBackgroundTasks
-	// is excluded: its Tools are in-flight task snapshots, not invocations.
+	// tool call in MessageText/MessageThinking). MessageBackgroundTasks is
+	// excluded on principle: its snapshot payload lives in Message.Tasks,
+	// not Tool/Tools, and must never be read as a tool invocation.
 	ToolCalls []ToolCall
 
 	// Usage is from MessageResult. Nil until a result is received.
@@ -64,8 +65,9 @@ func (s *TurnSummary) Add(msg Message) {
 	// (e.g., Claude CLI attaches Tool to MessageText/MessageThinking).
 	// Tools carries every tool_use block when one message holds several
 	// (parallel fan-out); Tool is last-one-wins and would undercount, so
-	// it is only the fallback. MessageBackgroundTasks is excluded: there
-	// Tools holds in-flight task snapshots, not invocations.
+	// it is only the fallback. MessageBackgroundTasks is excluded even
+	// though it no longer populates Tool/Tools (its snapshot payload is
+	// Message.Tasks) — the guard stays as a belt-and-suspenders backstop.
 	if msg.Type != MessageBackgroundTasks {
 		switch {
 		case len(msg.Tools) > 0:

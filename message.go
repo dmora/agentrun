@@ -186,9 +186,9 @@ type Message struct {
 	// Background reports outstanding background work at the time this message
 	// was produced, broken out per BackgroundKind. Stamped on MessageResult
 	// and MessageTaskResult, and only when the engine is configured to track
-	// that kind of background work (e.g., cli.WithSubagentTools). Nil means
-	// the backend tracks nothing — see BackgroundStats for the full nil vs.
-	// per-kind-absence contract.
+	// that kind of background work (e.g., cli.WithSubagentTools,
+	// cli.WithShellTracking). Nil means the backend tracks nothing — see
+	// BackgroundStats for the full nil vs. per-kind-absence contract.
 	Background *BackgroundStats `json:"background,omitempty"`
 
 	// Tasks holds one entry per background task on a MessageBackgroundTasks
@@ -390,11 +390,13 @@ func (c TaskCounts) Pending() int {
 // configured to track background work.
 //
 // Per-backend matrix (mirrors the Denials field convention):
-//   - Claude CLI: populated when cli.WithSubagentTools is set. The
-//     BackgroundSubagent pending set is driven authoritatively by the CLI's
-//     native background-task feed (MessageBackgroundTasks), with name-based
-//     tool_use counting as a fallback before the first native snapshot
-//     arrives.
+//   - Claude CLI: BackgroundSubagent populated when cli.WithSubagentTools is
+//     set; BackgroundShell (and any other native-feed kind) populated when
+//     cli.WithShellTracking is set — the two switches are independent. Once
+//     the first native background-task feed snapshot (MessageBackgroundTasks)
+//     arrives it authoritatively drives every enabled kind; before that,
+//     BackgroundSubagent alone has a name-based tool_use fallback (shell
+//     tasks are native-feed-only, see BackgroundKind).
 //   - Codex/OpenCode/agy/ACP: never populated (nil) — they neither emit the
 //     native feed nor the MessageTaskResult demote, and crucible does not opt
 //     them into tracking.
