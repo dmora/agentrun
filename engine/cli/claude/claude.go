@@ -74,7 +74,7 @@ const defaultBinary = "claude"
 
 // Backend is a Claude Code CLI backend for agentrun.
 // It implements all cli package interfaces: Spawner, Parser, Resumer,
-// Streamer, and InputFormatter.
+// Streamer, InputFormatter, BlockFormatter, and ShellFeedBackend.
 type Backend struct {
 	binary          string
 	partialMessages bool // default true — emit token-level streaming deltas
@@ -82,13 +82,14 @@ type Backend struct {
 
 // Compile-time interface satisfaction checks.
 var (
-	_ cli.Backend        = (*Backend)(nil)
-	_ cli.Spawner        = (*Backend)(nil)
-	_ cli.Parser         = (*Backend)(nil)
-	_ cli.Resumer        = (*Backend)(nil)
-	_ cli.Streamer       = (*Backend)(nil)
-	_ cli.InputFormatter = (*Backend)(nil)
-	_ cli.BlockFormatter = (*Backend)(nil)
+	_ cli.Backend          = (*Backend)(nil)
+	_ cli.Spawner          = (*Backend)(nil)
+	_ cli.Parser           = (*Backend)(nil)
+	_ cli.Resumer          = (*Backend)(nil)
+	_ cli.Streamer         = (*Backend)(nil)
+	_ cli.InputFormatter   = (*Backend)(nil)
+	_ cli.BlockFormatter   = (*Backend)(nil)
+	_ cli.ShellFeedBackend = (*Backend)(nil)
 )
 
 // Option configures a Backend at construction time.
@@ -158,6 +159,13 @@ func (b *Backend) StreamArgs(session agentrun.Session) (string, []string) {
 	args = appendSessionArgs(args, session)
 	return b.binary, args
 }
+
+// ShellFeed marks the backend as satisfying cli.ShellFeedBackend: Claude's
+// "background_tasks_changed" system event reports backgrounded shell
+// commands alongside subagents (see testdata/backgroundtask), so
+// cli.WithShellTracking activates on this backend. Marker method — never
+// called, only its implementation is type-asserted.
+func (b *Backend) ShellFeed() {}
 
 // ResumeArgs builds exec.Cmd arguments to resume an existing Claude session.
 // Returns an error if OptionResumeID is missing, contains null bytes, has

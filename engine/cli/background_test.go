@@ -463,6 +463,59 @@ func TestBackgroundTracker_Scenarios(t *testing.T) {
 			wantPendings: map[agentrun.BackgroundKind][]int{kindSub: {maxPendingPerKind}},
 			wantFinal:    map[agentrun.BackgroundKind]agentrun.TaskCounts{kindSub: {Started: maxPendingPerKind, Finished: 0}},
 		},
+
+		// --- applySnapshot ordering at the per-kind cap (review fix) ---
+		{
+			// A snapshot rotating a kind's ENTIRE live-id set at exactly the
+			// per-kind cap must not let the about-to-be-removed old ids block
+			// the new ids from being counted. Adding before removing would
+			// find the cap still "full" of the old ids and refuse every new
+			// one, then remove the old ids anyway — net Pending()==0 while
+			// the snapshot just declared maxPendingPerKind live (different)
+			// tasks: silent fake quiescence, the exact hazard the per-kind
+			// cap exists to prevent.
+			name:       "cap_rotation_does_not_fake_quiescence",
+			trackShell: true,
+			msgs: func() []agentrun.Message {
+				msgs := make([]agentrun.Message, 0, 5)
+				msgs = append(msgs, msgInit("s1"))
+				msgs = append(msgs, msgSnapshot(manyTasks(kindShell, maxPendingPerKind, "shellA")...))
+				msgs = append(msgs, msgResult())
+				msgs = append(msgs, msgSnapshot(manyTasks(kindShell, maxPendingPerKind, "shellB")...))
+				msgs = append(msgs, msgResult())
+				return msgs
+			}(),
+			wantPendings: map[agentrun.BackgroundKind][]int{kindShell: {maxPendingPerKind, maxPendingPerKind}},
+			wantFinal: map[agentrun.BackgroundKind]agentrun.TaskCounts{
+				kindShell: {Started: 2 * maxPendingPerKind, Finished: maxPendingPerKind},
+			},
+		},
+		{
+			// Same hazard, "one out one in" churn shape: dropping one stale
+			// id and introducing one new id in the same snapshot, while
+			// already at the cap, must keep Pending() AT the cap — not one
+			// under it (the new id must not be cap-refused).
+			name:       "cap_churn_one_in_one_out_keeps_full_count",
+			trackShell: true,
+			msgs: func() []agentrun.Message {
+				first := manyTasks(kindShell, maxPendingPerKind, "shell") // shell_0..shell_127
+				rotated := make([]agentrun.BackgroundTask, maxPendingPerKind)
+				for i := range rotated {
+					rotated[i] = shellTask(fmt.Sprintf("shell_%d", i+1)) // shell_1..shell_128: drops _0, adds _128
+				}
+				msgs := make([]agentrun.Message, 0, 5)
+				msgs = append(msgs, msgInit("s1"))
+				msgs = append(msgs, msgSnapshot(first...))
+				msgs = append(msgs, msgResult())
+				msgs = append(msgs, msgSnapshot(rotated...))
+				msgs = append(msgs, msgResult())
+				return msgs
+			}(),
+			wantPendings: map[agentrun.BackgroundKind][]int{kindShell: {maxPendingPerKind, maxPendingPerKind}},
+			wantFinal: map[agentrun.BackgroundKind]agentrun.TaskCounts{
+				kindShell: {Started: maxPendingPerKind + 1, Finished: 1},
+			},
+		},
 	}
 
 	for _, tt := range tests {

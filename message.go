@@ -60,9 +60,11 @@ const (
 	// Field semantics on this message:
 	//   - Content: the task's result text or notification summary.
 	//   - ParentToolUseID: the completing task's correlation id.
-	//   - Tasks: best-effort, a single entry describing the completing task
-	//     when its kind is known (source 1 above); may be absent when the
-	//     kind cannot be determined (source 2 above). See Message.Tasks.
+	//   - Tasks: always exactly one entry correlating the completing task by
+	//     ID — both sources populate it. Kind is BackgroundSubagent when
+	//     provably known (source 1 above), or empty when genuinely
+	//     unknowable (source 2 above): an empty Kind here means "unknown,"
+	//     never "absent." See Message.Tasks.
 	//   - Background: outstanding background-work stats after this completion
 	//     (when tracking is enabled).
 	//   - Raw: the original event, for consumers needing per-task detail.
@@ -193,10 +195,12 @@ type Message struct {
 
 	// Tasks holds one entry per background task on a MessageBackgroundTasks
 	// snapshot — every tracked BackgroundKind, not filtered to any single
-	// kind — and, best-effort, a single entry describing the completing task
-	// on MessageTaskResult when its kind is known (see MessageTaskResult).
-	// Nil when the backend does not populate this field, or the message
-	// carries no task data.
+	// kind — and, on MessageTaskResult, always exactly one entry correlating
+	// the completing task by ID (Kind set when provably known, empty when
+	// the backend's terminal notification carries no task type — an empty
+	// Kind means "unknown," not "absent"; see MessageTaskResult). Nil on
+	// every other message type, or when the backend does not populate this
+	// field at all.
 	Tasks []BackgroundTask `json:"tasks,omitempty"`
 
 	// Usage contains token usage data (typically on Text messages).
@@ -399,7 +403,10 @@ func (c TaskCounts) Pending() int {
 //     tasks are native-feed-only, see BackgroundKind).
 //   - Codex/OpenCode/agy/ACP: never populated (nil) — they neither emit the
 //     native feed nor the MessageTaskResult demote, and crucible does not opt
-//     them into tracking.
+//     them into tracking. Enforced, not incidental: cli.WithShellTracking
+//     only activates on a backend that declares cli.ShellFeedBackend (type
+//     assertion at Start), so a caller enabling it on one of these backends
+//     gets no BackgroundShell entry at all, not even a stamped {0,0}.
 //
 // Nil differs from a tracked-but-empty kind, which itself differs from an
 // untracked kind — the v0.8.0 SubagentStats nil-vs-zero distinction, now

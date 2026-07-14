@@ -77,7 +77,7 @@ type kindCounts struct {
 //     STORED kind, not whatever a later snapshot claimed
 type backgroundTracker struct {
 	names      map[string]struct{} // WithSubagentTools: enables + fallback-names BackgroundSubagent
-	trackShell bool                // WithShellTracking: enables every non-subagent kind
+	trackShell bool                // enables every non-subagent kind; already capability-gated, see below
 
 	pending map[string]agentrun.BackgroundKind      // id -> first-observed kind, live entries only
 	counts  map[agentrun.BackgroundKind]*kindCounts // per-kind Started/Finished
@@ -89,7 +89,11 @@ type backgroundTracker struct {
 // newBackgroundTracker returns a tracker configured from the two independent
 // opt-in switches, or nil (fully inert) when neither is set. names is
 // read-only and shared with the engine options; the tracker never mutates
-// it.
+// it. trackShell is the RESOLVED switch: the caller (process.go's scanLines)
+// has already ANDed WithShellTracking with the backend's declared
+// ShellFeedBackend capability, so this tracker has no notion of "backend
+// capabilities" itself — it seeds and tracks purely off the bool it is
+// given.
 func newBackgroundTracker(names map[string]struct{}, trackShell bool) *backgroundTracker {
 	if len(names) == 0 && !trackShell {
 		return nil
@@ -182,6 +186,14 @@ func (t *backgroundTracker) stamp(msg *agentrun.Message) {
 // latches native mode and discards any provisional name-based counts so the
 // counters reflect only authoritative data.
 //
+// Removals run BEFORE adds. A snapshot that simultaneously retires stale
+// ids and introduces new ones at a kind's per-kind cap must free the
+// retiring ids' slots first — adding first would cap-refuse the incoming
+// ids while the tracker is still "full" of entries this same snapshot is
+// about to drop, undercounting what the backend just reported as live (a
+// false-quiescence risk at exactly the boundary the per-kind cap exists to
+// guard, see maxPendingPerKind).
+//
 // A disabled kind's entries are never added (see enabled) — as if absent
 // from the snapshot entirely. An id already pending stays present in the
 // diff regardless of what kind THIS snapshot reports for it: a live id's
@@ -195,20 +207,24 @@ func (t *backgroundTracker) applySnapshot(tasks []agentrun.BackgroundTask) {
 	}
 	present := make(map[string]struct{}, len(tasks))
 	for _, task := range tasks {
-		if task.ID == "" {
-			continue
-		}
-		present[task.ID] = struct{}{}
-		if _, ok := t.pending[task.ID]; ok {
-			continue // already tracked; stored kind wins (I4), whatever this snapshot says
-		}
-		if t.enabled(task.Kind) {
-			t.add(task.ID, task.Kind)
+		if task.ID != "" {
+			present[task.ID] = struct{}{}
 		}
 	}
 	for id := range t.pending {
 		if _, ok := present[id]; !ok {
 			t.remove(id)
+		}
+	}
+	for _, task := range tasks {
+		if task.ID == "" {
+			continue
+		}
+		if _, ok := t.pending[task.ID]; ok {
+			continue // already tracked; stored kind wins (I4), whatever this snapshot says
+		}
+		if t.enabled(task.Kind) {
+			t.add(task.ID, task.Kind)
 		}
 	}
 }

@@ -150,8 +150,12 @@ func WithSubagentTools(names ...string) EngineOption {
 // shell-only-tracking consumer needs no subagent tool names) or together.
 //
 // Inert on backends with no native background-task feed (Codex, OpenCode,
-// ACP, agy): the option is accepted but there is nothing for it to observe,
-// so no non-subagent kind ever appears in Message.Background.
+// ACP, agy): the engine gates this option on the backend's declared
+// cli.ShellFeedBackend capability (resolved once at Start via type
+// assertion, the same mechanism as Resumer/Streamer). A backend that does
+// not implement it structurally cannot report non-subagent kinds, so the
+// option is accepted but tracking never activates for it — no non-subagent
+// kind ever appears in Message.Background, not even a stamped {0,0}.
 //
 // Callers must pair a wait on agentrun.BackgroundShell with a timeout, never
 // an unconditional wait to zero — see agentrun.BackgroundShell.
