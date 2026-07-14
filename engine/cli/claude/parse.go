@@ -68,11 +68,11 @@ func (b *Backend) ParseLine(line string) (agentrun.Message, error) {
 	if isSubagentEvent(raw) {
 		msg.Usage = nil
 		// A subagent's terminal "result" line must not end the parent turn.
-		// Demote it to MessageSubagentResult so drainOutput waits for the
+		// Demote it to MessageTaskResult so drainOutput waits for the
 		// parent's own result (see issue #57). Only the parent's result
 		// (no parent_tool_use_id) reaches parseResultMessage as MessageResult.
 		if msg.Type == agentrun.MessageResult {
-			msg.Type = agentrun.MessageSubagentResult
+			msg.Type = agentrun.MessageTaskResult
 			// Strip the result-only fields parseResultMessage populated: a
 			// subagent's stop reason, error flag, and denials describe the
 			// subagent, not the parent turn. Leaving StopReason set is the
@@ -190,11 +190,12 @@ func parseBackgroundTasks(raw map[string]any, msg *agentrun.Message) {
 }
 
 // parseTaskNotification maps a terminal "task_notification" (a background
-// subagent's completion, which never arrives as its own result line) to
-// MessageSubagentResult, correlating it via the notification's tool_use_id.
+// task's completion, which never arrives as its own result line) to
+// MessageTaskResult, correlating it via the notification's tool_use_id.
 // Non-terminal notifications stay plain system messages. task_notification
-// carries no task_type, so subagent scoping is handled downstream by the
-// tracker's idempotent remove (a non-subagent id was never in the set).
+// carries no task_type, so the completing task's kind is unknowable here;
+// downstream tracking scopes correctly anyway via the tracker's idempotent
+// remove (an id it never added is simply not in its set).
 func parseTaskNotification(raw map[string]any, msg *agentrun.Message) {
 	status := jsonutil.GetString(raw, "status")
 	if _, terminal := terminalTaskStatuses[status]; !terminal {
@@ -202,7 +203,7 @@ func parseTaskNotification(raw map[string]any, msg *agentrun.Message) {
 		msg.Content = jsonutil.GetString(raw, "message")
 		return
 	}
-	msg.Type = agentrun.MessageSubagentResult
+	msg.Type = agentrun.MessageTaskResult
 	msg.ParentToolUseID = jsonutil.GetString(raw, "tool_use_id")
 	msg.Content = jsonutil.GetString(raw, "summary")
 }

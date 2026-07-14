@@ -367,7 +367,7 @@ func TestRunTurn_Sequential_FreshChannel(t *testing.T) {
 // TestRunTurn_SubagentResultDoesNotEndTurn pins the fix for issue #57 on a
 // persistent (reused-channel) process — the streaming case the bug was reported
 // against. A subagent's terminal line is demoted by the backend to
-// MessageSubagentResult; drainOutput must NOT treat it as turn completion, so
+// MessageTaskResult; drainOutput must NOT treat it as turn completion, so
 // RunTurn returns only at the parent's own MessageResult with the full turn
 // drained. It then verifies a subsequent RunTurn on the SAME process sees none
 // of the first turn's messages — proving the premature-return + cross-dispatch
@@ -378,7 +378,7 @@ func TestRunTurn_SubagentResultDoesNotEndTurn(t *testing.T) {
 	// Turn 1: narration, then a subagent result (would have ended the turn
 	// early under the bug), then the parent's real deliverable + result.
 	mp.output <- Message{Type: MessageText, Content: "launched an Explore agent"}
-	mp.output <- Message{Type: MessageSubagentResult, Content: "subagent findings"}
+	mp.output <- Message{Type: MessageTaskResult, Content: "subagent findings"}
 	mp.output <- Message{Type: MessageText, Content: "the real deliverable"}
 	mp.output <- Message{Type: MessageResult, Content: "parent done"}
 
@@ -394,8 +394,8 @@ func TestRunTurn_SubagentResultDoesNotEndTurn(t *testing.T) {
 	if len(turn1) != 4 {
 		t.Fatalf("turn 1 got %d messages, want 4 (no early return at subagent result): %+v", len(turn1), turn1)
 	}
-	if turn1[1].Type != MessageSubagentResult {
-		t.Errorf("turn1[1].Type = %q, want %q (subagent result must be delivered, not terminating)", turn1[1].Type, MessageSubagentResult)
+	if turn1[1].Type != MessageTaskResult {
+		t.Errorf("turn1[1].Type = %q, want %q (subagent result must be delivered, not terminating)", turn1[1].Type, MessageTaskResult)
 	}
 	if turn1[2].Content != "the real deliverable" {
 		t.Errorf("turn1[2].Content = %q, want the parent deliverable", turn1[2].Content)

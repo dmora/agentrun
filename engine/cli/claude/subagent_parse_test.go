@@ -148,9 +148,9 @@ func TestParseLine_BackgroundTasksChanged_EmptyIsNonNil(t *testing.T) {
 	}
 }
 
-// --- task_notification -> MessageSubagentResult ---
+// --- task_notification -> MessageTaskResult ---
 
-func TestParseLine_TaskNotificationTerminal_MapsToSubagentResult(t *testing.T) {
+func TestParseLine_TaskNotificationTerminal_MapsToTaskResult(t *testing.T) {
 	b := New()
 	line := `{"type":"system","subtype":"task_notification","task_id":"a6b3f55a",` +
 		`"tool_use_id":"toolu_spawn","status":"completed","summary":"all done"}`
@@ -158,8 +158,8 @@ func TestParseLine_TaskNotificationTerminal_MapsToSubagentResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if msg.Type != agentrun.MessageSubagentResult {
-		t.Fatalf("Type = %q, want %q", msg.Type, agentrun.MessageSubagentResult)
+	if msg.Type != agentrun.MessageTaskResult {
+		t.Fatalf("Type = %q, want %q", msg.Type, agentrun.MessageTaskResult)
 	}
 	// Correlated by the notification's tool_use_id, NOT parent_tool_use_id
 	// (which is absent on notification lines).
@@ -171,7 +171,7 @@ func TestParseLine_TaskNotificationTerminal_MapsToSubagentResult(t *testing.T) {
 	}
 }
 
-func TestParseLine_TaskNotificationStopped_MapsToSubagentResult(t *testing.T) {
+func TestParseLine_TaskNotificationStopped_MapsToTaskResult(t *testing.T) {
 	b := New()
 	// "stopped" is the status Claude reports for a background task cancelled
 	// at shutdown — must be treated as terminal, same as "completed".
@@ -181,8 +181,8 @@ func TestParseLine_TaskNotificationStopped_MapsToSubagentResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if msg.Type != agentrun.MessageSubagentResult {
-		t.Fatalf("Type = %q, want %q", msg.Type, agentrun.MessageSubagentResult)
+	if msg.Type != agentrun.MessageTaskResult {
+		t.Fatalf("Type = %q, want %q", msg.Type, agentrun.MessageTaskResult)
 	}
 	if msg.ParentToolUseID != "toolu_spawn" {
 		t.Errorf("ParentToolUseID = %q, want %q", msg.ParentToolUseID, "toolu_spawn")

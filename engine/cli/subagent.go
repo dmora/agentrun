@@ -6,7 +6,8 @@ import "github.com/dmora/agentrun"
 
 // Bounds on tracker memory and stamped output. maxPendingSubagents caps the
 // pending set (a spawn that never reports completion cannot grow it without
-// limit); maxPendingIDsStamp caps the id slice copied onto each SubagentStats.
+// limit); maxPendingIDsStamp caps the id slice copied onto the stamped
+// TaskCounts.
 const (
 	maxPendingSubagents = 128
 	maxPendingIDsStamp  = 32
@@ -15,10 +16,11 @@ const (
 // subagentTracker tracks a parent turn's outstanding subagents across one
 // subprocess lifetime (a single scanLines pass). It is loop-local — created
 // per subprocess and threaded through enrichMessage like maxCallFill — and it
-// stamps SubagentStats onto MessageResult and MessageSubagentResult.
+// stamps a single-kind (BackgroundSubagent) agentrun.BackgroundStats onto
+// MessageResult and MessageTaskResult.
 //
 // A nil *subagentTracker is the inert state (WithSubagentTools unset): every
-// method is a no-op and Message.Subagents is never stamped, preserving
+// method is a no-op and Message.Background is never stamped, preserving
 // today's behavior byte-for-byte.
 //
 // Two counting modes, reconciled by the native latch:
@@ -34,7 +36,7 @@ const (
 //
 //   - Fallback (name-based): before any native snapshot, a parent-level
 //     tool_use whose name is in the tracked set adds a pending id, and a
-//     MessageSubagentResult removes it. This is the generic path for backends
+//     MessageTaskResult removes it. This is the generic path for backends
 //     that report completions but not a native task set.
 //
 // Invariant: Started-Finished == len(pending) == Pending(). Counters only move
@@ -82,7 +84,7 @@ func (t *subagentTracker) observe(msg *agentrun.Message) {
 		}
 	case agentrun.MessageBackgroundTasks:
 		t.applySnapshot(msg.Tools)
-	case agentrun.MessageSubagentResult:
+	case agentrun.MessageTaskResult:
 		// In native mode the snapshot is authoritative for the set; a
 		// completion notification only carries the stamp (removal already
 		// happened via the drained snapshot). In fallback mode it decrements.
@@ -113,13 +115,14 @@ func (t *subagentTracker) countNameBased(msg *agentrun.Message) {
 	}
 }
 
-// stamp attaches a SubagentStats snapshot to a result-bearing message. No-op on
-// a nil tracker, which leaves Message.Subagents nil ("backend does not track").
+// stamp attaches a BackgroundStats snapshot to a result-bearing message. No-op
+// on a nil tracker, which leaves Message.Background nil ("backend does not
+// track").
 func (t *subagentTracker) stamp(msg *agentrun.Message) {
 	if t == nil {
 		return
 	}
-	msg.Subagents = t.stats()
+	msg.Background = t.stats()
 }
 
 // applySnapshot replaces the pending set from an authoritative background-task
@@ -185,9 +188,12 @@ func (t *subagentTracker) reset() {
 	t.native = false
 }
 
-// stats snapshots the current counters and a capped view of the pending ids.
-func (t *subagentTracker) stats() *agentrun.SubagentStats {
-	s := &agentrun.SubagentStats{Started: t.started, Finished: t.finished}
+// stats snapshots the current counters and a capped view of the pending ids
+// into a single-kind (BackgroundSubagent) BackgroundStats. Today's tracker
+// only ever tracks subagents, so Kinds always holds exactly one entry; full
+// multi-kind generalization (a real per-kind tracker) is a later stage.
+func (t *subagentTracker) stats() *agentrun.BackgroundStats {
+	tc := agentrun.TaskCounts{Kind: agentrun.BackgroundSubagent, Started: t.started, Finished: t.finished}
 	if len(t.pending) > 0 {
 		ids := make([]string, 0, min(len(t.pending), maxPendingIDsStamp))
 		for id := range t.pending {
@@ -196,7 +202,7 @@ func (t *subagentTracker) stats() *agentrun.SubagentStats {
 			}
 			ids = append(ids, id)
 		}
-		s.PendingIDs = ids
+		tc.PendingIDs = ids
 	}
-	return s
+	return &agentrun.BackgroundStats{Kinds: []agentrun.TaskCounts{tc}}
 }

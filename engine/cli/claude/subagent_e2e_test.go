@@ -79,13 +79,14 @@ func replaySubagentFixture(t *testing.T, fixture string) []int {
 				return pendings
 			}
 			switch msg.Type {
-			case agentrun.MessageResult, agentrun.MessageSubagentResult:
-				if msg.Subagents == nil {
-					t.Errorf("%s should carry a Subagents stamp when tracking is enabled", msg.Type)
+			case agentrun.MessageResult, agentrun.MessageTaskResult:
+				if msg.Background == nil {
+					t.Errorf("%s should carry a Background stamp when tracking is enabled", msg.Type)
 					pendings = append(pendings, -1)
 					continue
 				}
-				pendings = append(pendings, msg.Subagents.Pending())
+				tc, _ := msg.Background.Kind(agentrun.BackgroundSubagent)
+				pendings = append(pendings, tc.Pending())
 			}
 		case <-ctx.Done():
 			t.Fatalf("timed out draining output; collected %v", pendings)
@@ -100,7 +101,7 @@ func TestE2E_Subagent_BackgroundRevive(t *testing.T) {
 	got := replaySubagentFixture(t, "bg-revive.jsonl")
 	t.Logf("result-bearing Pending() sequence: %v", got)
 	// Parent results: #1 outstanding, #2 outstanding (revive), #3 quiescent.
-	// Interleaved MessageSubagentResult completions report the drained count.
+	// Interleaved MessageTaskResult completions report the drained count.
 	// Recover just the three MessageResult pendings by replaying the known
 	// structure: results are the entries that follow snapshots draining/adding.
 	// Simplest robust check: the sequence must CONTAIN a non-quiescent value

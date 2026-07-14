@@ -460,9 +460,9 @@ func (p *process) enrichMessage(msg *agentrun.Message, lastStopReason agentrun.S
 	// Fold into the subagent pending set, then stamp the outcome on the two
 	// result-bearing types. observe-before-stamp so a completion's stamp
 	// reflects the post-removal count. Both are no-ops on a nil (inert)
-	// tracker, leaving Message.Subagents nil.
+	// tracker, leaving Message.Background nil.
 	tracker.observe(msg)
-	if msg.Type == agentrun.MessageResult || msg.Type == agentrun.MessageSubagentResult {
+	if msg.Type == agentrun.MessageResult || msg.Type == agentrun.MessageTaskResult {
 		tracker.stamp(msg)
 	}
 	return lastStopReason, maxCallFill

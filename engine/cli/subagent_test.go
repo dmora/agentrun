@@ -52,7 +52,7 @@ func msgSnapshot(ids ...string) agentrun.Message {
 }
 
 func msgSubagentDone(parentToolUseID string) agentrun.Message {
-	return agentrun.Message{Type: agentrun.MessageSubagentResult, ParentToolUseID: parentToolUseID}
+	return agentrun.Message{Type: agentrun.MessageTaskResult, ParentToolUseID: parentToolUseID}
 }
 
 func msgResult() agentrun.Message { return agentrun.Message{Type: agentrun.MessageResult} }
@@ -65,7 +65,7 @@ func runTracker(tr *subagentTracker, msgs ...agentrun.Message) []agentrun.Messag
 	for i := range msgs {
 		m := msgs[i]
 		tr.observe(&m)
-		if m.Type == agentrun.MessageResult || m.Type == agentrun.MessageSubagentResult {
+		if m.Type == agentrun.MessageResult || m.Type == agentrun.MessageTaskResult {
 			tr.stamp(&m)
 		}
 		out[i] = m
@@ -73,12 +73,20 @@ func runTracker(tr *subagentTracker, msgs ...agentrun.Message) []agentrun.Messag
 	return out
 }
 
+// subagentCounts extracts the BackgroundSubagent TaskCounts stamped on a
+// message, defaulting to the zero value when untracked (Background nil) —
+// mirrors the nil-safety the deleted SubagentStats.Pending gave call sites.
+func subagentCounts(m agentrun.Message) agentrun.TaskCounts {
+	tc, _ := m.Background.Kind(agentrun.BackgroundSubagent)
+	return tc
+}
+
 // resultPendings extracts Pending() from every stamped result-bearing message.
 func resultPendings(msgs []agentrun.Message) []int {
 	var out []int
 	for _, m := range msgs {
-		if m.Type == agentrun.MessageResult || m.Type == agentrun.MessageSubagentResult {
-			out = append(out, m.Subagents.Pending())
+		if m.Type == agentrun.MessageResult || m.Type == agentrun.MessageTaskResult {
+			out = append(out, subagentCounts(m).Pending())
 		}
 	}
 	return out
@@ -87,15 +95,15 @@ func resultPendings(msgs []agentrun.Message) []int {
 // --- opt-in gate ---
 
 func TestTracker_EmptySet_IsInert(t *testing.T) {
-	// Empty WithSubagentTools => nil tracker => Subagents never stamped.
+	// Empty WithSubagentTools => nil tracker => Background never stamped.
 	tr := newSubagentTracker(nil)
 	if tr != nil {
 		t.Fatal("empty name set must yield a nil (inert) tracker")
 	}
 	out := runTracker(tr, msgInit("s1"), msgSpawn("Task", "toolu_1"), msgResult())
 	for _, m := range out {
-		if m.Subagents != nil {
-			t.Errorf("inert tracker must leave Subagents nil, got %+v on %s", m.Subagents, m.Type)
+		if m.Background != nil {
+			t.Errorf("inert tracker must leave Background nil, got %+v on %s", m.Background, m.Type)
 		}
 	}
 }
@@ -106,8 +114,8 @@ func TestTracker_NonSubagentBackend_ToolNamedTask_StaysNilWhenNotOptedIn(t *test
 	tr := newSubagentTracker(nil)
 	out := runTracker(tr, msgInit("s1"), msgSpawn("Task", "toolu_x"), msgResult())
 	last := out[len(out)-1]
-	if last.Subagents != nil {
-		t.Errorf("Subagents should stay nil for a non-opted-in backend, got %+v", last.Subagents)
+	if last.Background != nil {
+		t.Errorf("Background should stay nil for a non-opted-in backend, got %+v", last.Background)
 	}
 }
 
@@ -224,13 +232,13 @@ func TestTracker_Native_SupersedesNameBasedCounts(t *testing.T) {
 		msgSnapshot("task_a"), // authoritative: exactly one subagent
 		msgResult(),
 	)
-	last := out[len(out)-1]
-	if last.Subagents.Pending() != 1 {
-		t.Errorf("Pending() = %d, want 1 (snapshot authoritative)", last.Subagents.Pending())
+	last := subagentCounts(out[len(out)-1])
+	if last.Pending() != 1 {
+		t.Errorf("Pending() = %d, want 1 (snapshot authoritative)", last.Pending())
 	}
-	if last.Subagents.Started != 1 || last.Subagents.Finished != 0 {
+	if last.Started != 1 || last.Finished != 0 {
 		t.Errorf("Started/Finished = %d/%d, want 1/0 (provisional counts discarded)",
-			last.Subagents.Started, last.Subagents.Finished)
+			last.Started, last.Finished)
 	}
 }
 
@@ -245,12 +253,12 @@ func TestTracker_Native_SubagentResultDoesNotDoubleDecrement(t *testing.T) {
 		msgSubagentDone("task_a"), // must NOT decrement again
 		msgResult(),
 	)
-	last := out[len(out)-1]
-	if last.Subagents.Finished != 1 {
-		t.Errorf("Finished = %d, want 1 (no double-decrement)", last.Subagents.Finished)
+	last := subagentCounts(out[len(out)-1])
+	if last.Finished != 1 {
+		t.Errorf("Finished = %d, want 1 (no double-decrement)", last.Finished)
 	}
-	if last.Subagents.Pending() != 0 {
-		t.Errorf("Pending() = %d, want 0", last.Subagents.Pending())
+	if last.Pending() != 0 {
+		t.Errorf("Pending() = %d, want 0", last.Pending())
 	}
 }
 
@@ -261,18 +269,18 @@ func TestTracker_StampsOnResultAndSubagentResult(t *testing.T) {
 	out := runTracker(tr,
 		msgInit("s1"),
 		msgSnapshot("task_a"),
-		msgSubagentDone("task_a"), // MessageSubagentResult — must be stamped
+		msgSubagentDone("task_a"), // MessageTaskResult — must be stamped
 		msgResult(),               // MessageResult — must be stamped
 	)
 	for _, m := range out {
 		switch m.Type {
-		case agentrun.MessageSubagentResult, agentrun.MessageResult:
-			if m.Subagents == nil {
-				t.Errorf("%s must carry a non-nil Subagents stamp", m.Type)
+		case agentrun.MessageTaskResult, agentrun.MessageResult:
+			if m.Background == nil {
+				t.Errorf("%s must carry a non-nil Background stamp", m.Type)
 			}
 		default:
-			if m.Subagents != nil {
-				t.Errorf("%s must NOT be stamped, got %+v", m.Type, m.Subagents)
+			if m.Background != nil {
+				t.Errorf("%s must NOT be stamped, got %+v", m.Type, m.Background)
 			}
 		}
 	}
@@ -289,7 +297,7 @@ func TestTracker_ResetOnNewSessionInitOnly(t *testing.T) {
 		msgInit("s1"), // SAME session — must NOT reset
 		msgResult(),
 	)
-	if p := out[len(out)-1].Subagents.Pending(); p != 1 {
+	if p := subagentCounts(out[len(out)-1]).Pending(); p != 1 {
 		t.Errorf("same-session re-init must be idempotent, Pending=%d want 1", p)
 	}
 
@@ -301,7 +309,7 @@ func TestTracker_ResetOnNewSessionInitOnly(t *testing.T) {
 		msgInit("s2"), // NEW session — resets
 		msgResult(),
 	)
-	if p := out2[len(out2)-1].Subagents.Pending(); p != 0 {
+	if p := subagentCounts(out2[len(out2)-1]).Pending(); p != 0 {
 		t.Errorf("new-session init must reset, Pending=%d want 0", p)
 	}
 }
@@ -316,8 +324,8 @@ func TestTracker_NeverResetsOnResult(t *testing.T) {
 		msgResult(),
 	)
 	for _, m := range out {
-		if m.Type == agentrun.MessageResult && m.Subagents.Pending() != 1 {
-			t.Errorf("pending must survive the result boundary, Pending=%d want 1", m.Subagents.Pending())
+		if m.Type == agentrun.MessageResult && subagentCounts(m).Pending() != 1 {
+			t.Errorf("pending must survive the result boundary, Pending=%d want 1", subagentCounts(m).Pending())
 		}
 	}
 }
@@ -332,11 +340,11 @@ func TestTracker_PendingSetCapped(t *testing.T) {
 	}
 	msgs = append(msgs, msgResult())
 	out := runTracker(tr, msgs...)
-	last := out[len(out)-1]
-	if last.Subagents.Pending() != maxPendingSubagents {
-		t.Errorf("Pending() = %d, want cap %d", last.Subagents.Pending(), maxPendingSubagents)
+	last := subagentCounts(out[len(out)-1])
+	if last.Pending() != maxPendingSubagents {
+		t.Errorf("Pending() = %d, want cap %d", last.Pending(), maxPendingSubagents)
 	}
-	if len(last.Subagents.PendingIDs) > maxPendingIDsStamp {
-		t.Errorf("PendingIDs len = %d, want <= %d", len(last.Subagents.PendingIDs), maxPendingIDsStamp)
+	if len(last.PendingIDs) > maxPendingIDsStamp {
+		t.Errorf("PendingIDs len = %d, want <= %d", len(last.PendingIDs), maxPendingIDsStamp)
 	}
 }

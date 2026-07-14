@@ -30,9 +30,10 @@
 //     when an assistant event's content array has thinking blocks but no text
 //   - [agentrun.MessageToolResult] — completed tool execution (from "tool" events)
 //   - [agentrun.MessageResult] — turn completion with optional usage data
-//   - [agentrun.MessageSubagentResult] — a subagent's terminal result: a demoted
-//     subagent "result" line, or a terminal "task_notification" (background
-//     subagent completion)
+//   - [agentrun.MessageTaskResult] — a background task's terminal result: a
+//     demoted subagent "result" line, or a terminal "task_notification"
+//     (background task completion; the completing task's kind is often
+//     unknowable from this notification alone — see the type's godoc)
 //   - [agentrun.MessageBackgroundTasks] — an authoritative snapshot of in-flight
 //     background subagent tasks (from "background_tasks_changed"), filtered to
 //     subagents (local_agent); the tracker's pending set

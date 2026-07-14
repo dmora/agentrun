@@ -1417,7 +1417,7 @@ func TestParseLine_SubagentResultUsageNilledOut(t *testing.T) {
 	b := New()
 	// Subagent result event (parent_tool_use_id set): the common case for any
 	// station that spawns a Task/Explore subagent. It must be demoted to a
-	// non-terminating MessageSubagentResult so it cannot end the parent turn
+	// non-terminating MessageTaskResult so it cannot end the parent turn
 	// (issue #57). Its Usage must be dropped so it does not inflate the parent's
 	// context-fill tracking, and the other result-only fields (StopReason,
 	// IsError, Denials) must be cleared so a subagent's outcome cannot leak onto
@@ -1428,8 +1428,8 @@ func TestParseLine_SubagentResultUsageNilledOut(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if msg.Type != agentrun.MessageSubagentResult {
-		t.Errorf("type = %q, want %q", msg.Type, agentrun.MessageSubagentResult)
+	if msg.Type != agentrun.MessageTaskResult {
+		t.Errorf("type = %q, want %q", msg.Type, agentrun.MessageTaskResult)
 	}
 	if msg.Usage != nil {
 		t.Errorf("subagent result Usage should be nil, got %+v", msg.Usage)
