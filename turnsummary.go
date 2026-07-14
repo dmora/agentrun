@@ -19,9 +19,11 @@ type TurnSummary struct {
 	ThinkingBlocks []string
 
 	// ToolCalls contains tool invocations observed during the turn.
-	// Captured from MessageToolUse and from non-nil Tool fields on
-	// MessageText/MessageThinking (Claude CLI embeds tool calls in
-	// content messages rather than emitting separate MessageToolUse).
+	// Captured from every Tools entry when present (a single message may
+	// carry several tool_use blocks — parallel fan-out), falling back to
+	// the single Tool field (MessageToolUse, or Claude CLI embedding a
+	// tool call in MessageText/MessageThinking). MessageBackgroundTasks
+	// is excluded: its Tools are in-flight task snapshots, not invocations.
 	ToolCalls []ToolCall
 
 	// Usage is from MessageResult. Nil until a result is received.
@@ -60,8 +62,21 @@ func (s *TurnSummary) Add(msg Message) {
 	// Capture tool calls from any message type. This handles explicit
 	// MessageToolUse as well as tool calls embedded in content messages
 	// (e.g., Claude CLI attaches Tool to MessageText/MessageThinking).
-	if msg.Tool != nil {
-		s.ToolCalls = append(s.ToolCalls, *msg.Tool)
+	// Tools carries every tool_use block when one message holds several
+	// (parallel fan-out); Tool is last-one-wins and would undercount, so
+	// it is only the fallback. MessageBackgroundTasks is excluded: there
+	// Tools holds in-flight task snapshots, not invocations.
+	if msg.Type != MessageBackgroundTasks {
+		switch {
+		case len(msg.Tools) > 0:
+			for _, tc := range msg.Tools {
+				if tc != nil {
+					s.ToolCalls = append(s.ToolCalls, *tc)
+				}
+			}
+		case msg.Tool != nil:
+			s.ToolCalls = append(s.ToolCalls, *msg.Tool)
+		}
 	}
 
 	switch msg.Type {
