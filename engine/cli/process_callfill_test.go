@@ -414,3 +414,43 @@ func TestApplyContextFill_MidTurnZeroFill(t *testing.T) {
 		t.Errorf("result ContextUsedTokens = %d, want 0 (zero fill)", result.Usage.ContextUsedTokens)
 	}
 }
+
+// TestApplyContextFill_OpenCodeStepFinishToolCallsNoContextFill replays, via
+// the real (unexported) scanLines -> enrichMessage path, the exact Message
+// shapes opencode.ParseLine produces for a tool-using turn: text, a tool
+// result, a "tool-calls" step_finish (MessageSystem, no Usage), more text,
+// then the terminal "stop" step_finish (MessageResult with Usage).
+//
+// Regression test: OpenCode's "tool-calls" step_finish briefly carried Usage
+// on its MessageSystem message (to avoid dropping the wire's per-step token
+// counts). But applyContextFill/synthesizeContextWindow treat Usage on ANY
+// non-MessageResult message as a trustworthy per-call context-fill sample —
+// so that Usage silently turned on context-fill tracking for OpenCode,
+// synthesizing a mid-turn MessageContextWindow and a non-zero
+// MessageResult.Usage.ContextUsedTokens. Both contradict the documented
+// invariant that backends reporting usage only on the result event (Codex,
+// OpenCode) leave ContextUsedTokens at 0 (see message.go's
+// Usage.ContextUsedTokens doc). This test pins the fix: no Usage on the
+// intermediate message means no context-fill side effects.
+func TestApplyContextFill_OpenCodeStepFinishToolCallsNoContextFill(t *testing.T) {
+	msgs := runScanLines(t, []agentrun.Message{
+		{Type: agentrun.MessageText, Content: "Let me check that"},
+		{Type: agentrun.MessageToolResult},
+		{Type: agentrun.MessageSystem, Content: "step_finish: tool-calls"}, // no Usage
+		{Type: agentrun.MessageText, Content: "Here is the final answer"},
+		{Type: agentrun.MessageResult, Usage: &agentrun.Usage{InputTokens: 150, OutputTokens: 40}, StopReason: agentrun.StopEndTurn},
+	})
+
+	for i, m := range msgs {
+		if m.Type == agentrun.MessageContextWindow {
+			t.Errorf("msg[%d]: unexpected MessageContextWindow synthesized: %+v", i, m)
+		}
+	}
+	result := findResult(msgs)
+	if result == nil {
+		t.Fatal("no MessageResult found")
+	}
+	if result.Usage.ContextUsedTokens != 0 {
+		t.Errorf("result ContextUsedTokens = %d, want 0 (OpenCode reports usage only on the result event; no fabricated peak)", result.Usage.ContextUsedTokens)
+	}
+}

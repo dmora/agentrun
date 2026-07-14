@@ -245,7 +245,7 @@ func parseTopLevelError(raw map[string]any, msg *agentrun.Message) {
 }
 
 // parseUsage extracts token usage from turn.completed events.
-// Path: raw.usage.{input_tokens, cached_input_tokens, output_tokens}
+// Path: raw.usage.{input_tokens, cached_input_tokens, output_tokens, reasoning_output_tokens}
 func parseUsage(raw map[string]any) *agentrun.Usage {
 	usage := jsonutil.GetMap(raw, "usage")
 	if usage == nil {
@@ -256,8 +256,9 @@ func parseUsage(raw map[string]any) *agentrun.Usage {
 		InputTokens:     jsonutil.GetInt(usage, "input_tokens"),
 		OutputTokens:    jsonutil.GetInt(usage, "output_tokens"),
 		CacheReadTokens: jsonutil.GetInt(usage, "cached_input_tokens"),
+		ThinkingTokens:  jsonutil.GetInt(usage, "reasoning_output_tokens"),
 	}
-	if u.InputTokens == 0 && u.OutputTokens == 0 && u.CacheReadTokens == 0 {
+	if u.InputTokens == 0 && u.OutputTokens == 0 && u.CacheReadTokens == 0 && u.ThinkingTokens == 0 {
 		return nil
 	}
 	return u

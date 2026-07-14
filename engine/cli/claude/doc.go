@@ -26,6 +26,8 @@
 //   - [agentrun.MessageInit] — session start (from "system/init" or "init" events)
 //   - [agentrun.MessageSystem] — system status messages
 //   - [agentrun.MessageText] — assistant text, may include tool calls via Message.Tool/Tools
+//   - [agentrun.MessageThinking] — assistant extended-thinking content, emitted
+//     when an assistant event's content array has thinking blocks but no text
 //   - [agentrun.MessageToolResult] — completed tool execution (from "tool" events)
 //   - [agentrun.MessageResult] — turn completion with optional usage data
 //   - [agentrun.MessageSubagentResult] — a subagent's terminal result: a demoted
@@ -35,6 +37,14 @@
 //     background subagent tasks (from "background_tasks_changed"), filtered to
 //     subagents (local_agent); the tracker's pending set
 //   - [agentrun.MessageError] — error events
+//
+// When partial-message streaming is enabled (the default — see
+// [WithPartialMessages]), "stream_event" content_block_delta events also
+// produce these token-level delta types:
+//
+//   - [agentrun.MessageTextDelta] — incremental assistant text
+//   - [agentrun.MessageToolUseDelta] — incremental tool_use input JSON
+//   - [agentrun.MessageThinkingDelta] — incremental extended-thinking content
 //
 // Note: [agentrun.MessageToolUse] is never emitted by this backend. Tool
 // invocations appear as tool_use blocks inside assistant messages. Every block

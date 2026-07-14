@@ -443,6 +443,21 @@ func TestParseLine_TurnCompleted_CachedTokens(t *testing.T) {
 	}
 }
 
+func TestParseUsage_ReasoningTokens(t *testing.T) {
+	b := New()
+	line := `{"type":"turn.completed","usage":{"input_tokens":35501,"cached_input_tokens":27904,"output_tokens":177,"reasoning_output_tokens":114}}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Usage == nil {
+		t.Fatal("Usage is nil")
+	}
+	if msg.Usage.ThinkingTokens != 114 {
+		t.Errorf("ThinkingTokens = %d, want 114", msg.Usage.ThinkingTokens)
+	}
+}
+
 // --- turn.failed ---
 
 func TestParseLine_TurnFailed(t *testing.T) {

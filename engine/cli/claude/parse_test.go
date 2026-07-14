@@ -139,7 +139,7 @@ func TestParseLine_StandaloneInit_NoSessionID(t *testing.T) {
 
 func TestParseLine_StandaloneInit_WithModel(t *testing.T) {
 	b := New()
-	line := `{"type":"init","session_id":"xyz","model":"claude-sonnet-4-5-20250514"}`
+	line := `{"type":"init","session_id":"xyz","model":"claude-sonnet-4-5-20250514","claude_code_version":"2.1.204"}`
 	msg, err := b.ParseLine(line)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -149,12 +149,15 @@ func TestParseLine_StandaloneInit_WithModel(t *testing.T) {
 	}
 	if msg.Init.Model != "claude-sonnet-4-5-20250514" {
 		t.Errorf("Init.Model = %q, want %q", msg.Init.Model, "claude-sonnet-4-5-20250514")
+	}
+	if msg.Init.AgentVersion != testAgentVersion {
+		t.Errorf("Init.AgentVersion = %q, want %q", msg.Init.AgentVersion, testAgentVersion)
 	}
 }
 
 func TestParseLine_SystemInit_WithModel(t *testing.T) {
 	b := New()
-	line := `{"type":"system","subtype":"init","session_id":"abc","model":"claude-sonnet-4-5-20250514"}`
+	line := `{"type":"system","subtype":"init","session_id":"abc","model":"claude-sonnet-4-5-20250514","claude_code_version":"2.1.204"}`
 	msg, err := b.ParseLine(line)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -164,6 +167,50 @@ func TestParseLine_SystemInit_WithModel(t *testing.T) {
 	}
 	if msg.Init.Model != "claude-sonnet-4-5-20250514" {
 		t.Errorf("Init.Model = %q, want %q", msg.Init.Model, "claude-sonnet-4-5-20250514")
+	}
+	if msg.Init.AgentVersion != testAgentVersion {
+		t.Errorf("Init.AgentVersion = %q, want %q", msg.Init.AgentVersion, testAgentVersion)
+	}
+}
+
+func TestParseLine_SystemInit_NoVersion(t *testing.T) {
+	b := New()
+	// bg-revive.jsonl/fg.jsonl-style fixture: older/minimal init events carry
+	// model but no claude_code_version. AgentVersion must stay empty rather
+	// than error, and Model parsing must be unaffected.
+	line := `{"type":"system","subtype":"init","session_id":"d82c6a90-8ec7-4ec6-841d-b5760160d564","model":"claude-sonnet-5"}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Init == nil {
+		t.Fatal("Init should be populated when model present")
+	}
+	if msg.Init.Model != "claude-sonnet-5" {
+		t.Errorf("Init.Model = %q, want %q", msg.Init.Model, "claude-sonnet-5")
+	}
+	if msg.Init.AgentVersion != "" {
+		t.Errorf("Init.AgentVersion = %q, want empty (key absent)", msg.Init.AgentVersion)
+	}
+}
+
+func TestParseLine_StandaloneInit_VersionOnlyNoModel(t *testing.T) {
+	b := New()
+	// Nil-guard boundary: version present but model absent — Init must still
+	// be non-nil (matches the "at least one field set" contract in message.go).
+	line := `{"type":"init","session_id":"xyz","claude_code_version":"2.1.204"}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Init == nil {
+		t.Fatal("Init should be populated when claude_code_version present, even without model")
+	}
+	if msg.Init.AgentVersion != testAgentVersion {
+		t.Errorf("Init.AgentVersion = %q, want %q", msg.Init.AgentVersion, testAgentVersion)
+	}
+	if msg.Init.Model != "" {
+		t.Errorf("Init.Model = %q, want empty", msg.Init.Model)
 	}
 }
 
@@ -215,6 +262,123 @@ func TestParseLine_SystemInit_NoModel(t *testing.T) {
 	}
 	if msg.Init != nil {
 		t.Errorf("Init should be nil when no model, got %+v", msg.Init)
+	}
+}
+
+// --- System subtype content synthesis (hook lifecycle, thinking tokens) ---
+//
+// hook_started, hook_progress, and thinking_tokens shapes below are the exact
+// wire shapes observed live (mcp__agentrun__run_turn, 2026-07-13); none carry
+// a "message" key, so they previously fell through to empty Content.
+
+func TestParseLine_SystemSubtypeContentSynthesis(t *testing.T) {
+	tests := []struct {
+		name    string
+		line    string
+		wantCnt string
+	}{
+		{
+			name: "hook_started",
+			line: `{"type":"system","subtype":"hook_started","hook_id":"80871d42-0cc9-43d1-92a7-1b499405d569",` +
+				`"hook_name":"SessionStart:startup","hook_event":"SessionStart","uuid":"7b87f9b7","session_id":"abc"}`,
+			wantCnt: "hook_started: SessionStart:startup (SessionStart)",
+		},
+		{
+			name: "hook_progress",
+			line: `{"type":"system","subtype":"hook_progress","hook_id":"80871d42-0cc9-43d1-92a7-1b499405d569",` +
+				`"hook_name":"SessionStart:startup","hook_event":"SessionStart",` +
+				`"stdout":"{\"async\": true}\n","stderr":"","output":"{\"async\": true}\n","session_id":"abc"}`,
+			wantCnt: "hook_progress: SessionStart:startup stdout={\"async\": true}\n stderr=",
+		},
+		{
+			// hook_response is not directly captured live in this probe session
+			// (the observed hook was still async when the turn completed); shape
+			// constructed from the sibling hook_started/hook_progress structure
+			// plus the outcome/exit_code fields the response carries.
+			name: "hook_response",
+			line: `{"type":"system","subtype":"hook_response","hook_id":"80871d42-0cc9-43d1-92a7-1b499405d569",` +
+				`"hook_name":"SessionStart:startup","hook_event":"SessionStart","outcome":"success","exit_code":0,"session_id":"abc"}`,
+			wantCnt: "hook_response: SessionStart:startup outcome=success exit_code=0",
+		},
+		{
+			name:    "thinking_tokens",
+			line:    `{"type":"system","subtype":"thinking_tokens","estimated_tokens":150,"estimated_tokens_delta":100,"session_id":"abc"}`,
+			wantCnt: "thinking_tokens: estimated=150",
+		},
+	}
+
+	b := New()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			msg, err := b.ParseLine(tt.line)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if msg.Type != agentrun.MessageSystem {
+				t.Errorf("Type = %q, want %q", msg.Type, agentrun.MessageSystem)
+			}
+			if msg.Content == "" {
+				t.Fatal("Content should be non-empty (these subtypes carry no \"message\" key)")
+			}
+			if msg.Content != tt.wantCnt {
+				t.Errorf("Content = %q, want %q", msg.Content, tt.wantCnt)
+			}
+		})
+	}
+}
+
+func TestParseLine_SystemSubtypeUnaffected_TaskStarted(t *testing.T) {
+	b := New()
+	// task_started/task_updated are explicitly out of scope (issue #61 D2) and
+	// must keep falling through with empty Content, unchanged.
+	line := `{"type":"system","subtype":"task_started","task_id":"a1","session_id":"abc"}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Type != agentrun.MessageSystem {
+		t.Errorf("Type = %q, want %q", msg.Type, agentrun.MessageSystem)
+	}
+	if msg.Content != "" {
+		t.Errorf("Content = %q, want empty (task_started out of scope)", msg.Content)
+	}
+}
+
+// --- rate_limit_event content synthesis ---
+//
+// Wire shape observed live (mcp__agentrun__run_turn, 2026-07-13): a bare
+// top-level "type":"rate_limit_event", not wrapped in "system".
+
+func TestParseLine_RateLimitEvent(t *testing.T) {
+	b := New()
+	line := `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1783980600,` +
+		`"rateLimitType":"five_hour","overageStatus":"rejected","overageDisabledReason":"org_level_disabled",` +
+		`"isUsingOverage":false},"uuid":"1ac76d58","session_id":"abc"}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// No dedicated MessageType constant for this event — stays the dynamic
+	// sanitized type (see sanitizeUnknownType).
+	if msg.Type != agentrun.MessageType("rate_limit_event") {
+		t.Errorf("Type = %q, want %q", msg.Type, "rate_limit_event")
+	}
+	wantCnt := "rate_limit_event: status=allowed type=five_hour"
+	if msg.Content != wantCnt {
+		t.Errorf("Content = %q, want %q", msg.Content, wantCnt)
+	}
+}
+
+func TestParseLine_RateLimitEventMissingInfo(t *testing.T) {
+	b := New()
+	// Malformed/absent rate_limit_info must not panic; Content stays empty.
+	line := `{"type":"rate_limit_event","session_id":"abc"}`
+	msg, err := b.ParseLine(line)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Content != "" {
+		t.Errorf("Content = %q, want empty when rate_limit_info absent", msg.Content)
 	}
 }
 

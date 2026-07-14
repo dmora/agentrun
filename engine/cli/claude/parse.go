@@ -43,10 +43,7 @@ func (b *Backend) ParseLine(line string) (agentrun.Message, error) {
 		parseSystemMessage(raw, &msg)
 	case "init":
 		msg.Type = agentrun.MessageInit
-		msg.ResumeID = jsonutil.GetString(raw, "session_id")
-		if model := errfmt.SanitizeCode(jsonutil.GetString(raw, "model")); model != "" {
-			msg.Init = &agentrun.InitMeta{Model: model}
-		}
+		msg.ResumeID, msg.Init = parseInitFields(raw)
 	case "assistant":
 		parseAssistantMessage(raw, &msg)
 	case "tool":
@@ -61,6 +58,7 @@ func (b *Backend) ParseLine(line string) (agentrun.Message, error) {
 		parseStreamEvent(raw, &msg)
 	default:
 		msg.Type = sanitizeUnknownType(typeStr)
+		msg.Content = rateLimitSummary(typeStr, raw)
 	}
 
 	// Subagent events (parent_tool_use_id != null) carry the subagent's
@@ -89,16 +87,27 @@ func (b *Backend) ParseLine(line string) (agentrun.Message, error) {
 	return msg, nil
 }
 
+// parseInitFields extracts the ResumeID and InitMeta shared by both init
+// shapes (bare "init" and "system"/"init"). model and claude_code_version
+// are sanitized identically to any other identifier field.
+func parseInitFields(raw map[string]any) (resumeID string, init *agentrun.InitMeta) {
+	resumeID = jsonutil.GetString(raw, "session_id")
+	model := errfmt.SanitizeCode(jsonutil.GetString(raw, "model"))
+	version := errfmt.SanitizeCode(jsonutil.GetString(raw, "claude_code_version"))
+	if model != "" || version != "" {
+		init = &agentrun.InitMeta{Model: model, AgentVersion: version}
+	}
+	return resumeID, init
+}
+
 // parseSystemMessage handles "system" events, detecting the init,
 // background_tasks_changed, and task_notification subtypes.
 func parseSystemMessage(raw map[string]any, msg *agentrun.Message) {
-	switch jsonutil.GetString(raw, "subtype") {
+	subtype := jsonutil.GetString(raw, "subtype")
+	switch subtype {
 	case "init":
 		msg.Type = agentrun.MessageInit
-		msg.ResumeID = jsonutil.GetString(raw, "session_id")
-		if model := errfmt.SanitizeCode(jsonutil.GetString(raw, "model")); model != "" {
-			msg.Init = &agentrun.InitMeta{Model: model}
-		}
+		msg.ResumeID, msg.Init = parseInitFields(raw)
 	case "background_tasks_changed":
 		parseBackgroundTasks(raw, msg)
 	case "task_notification":
@@ -106,6 +115,35 @@ func parseSystemMessage(raw map[string]any, msg *agentrun.Message) {
 	default:
 		msg.Type = agentrun.MessageSystem
 		msg.Content = jsonutil.GetString(raw, "message")
+		if msg.Content == "" {
+			msg.Content = systemSubtypeSummary(subtype, raw)
+		}
+	}
+}
+
+// systemSubtypeSummary synthesizes Content for system subtypes that carry no
+// "message" key but do carry other structured, decision-relevant fields:
+// hook lifecycle events and extended-thinking token estimates. task_started
+// and task_updated are intentionally excluded (tracked separately, see issue
+// #61 D2) and fall through with empty Content, unchanged from prior behavior.
+func systemSubtypeSummary(subtype string, raw map[string]any) string {
+	switch subtype {
+	case "hook_started":
+		return "hook_started: " + jsonutil.GetString(raw, "hook_name") +
+			" (" + jsonutil.GetString(raw, "hook_event") + ")"
+	case "hook_progress":
+		return errfmt.Truncate("hook_progress: " + jsonutil.GetString(raw, "hook_name") +
+			" stdout=" + jsonutil.GetString(raw, "stdout") +
+			" stderr=" + jsonutil.GetString(raw, "stderr"))
+	case "hook_response":
+		return fmt.Sprintf("hook_response: %s outcome=%s exit_code=%d",
+			jsonutil.GetString(raw, "hook_name"),
+			jsonutil.GetString(raw, "outcome"),
+			jsonutil.GetInt(raw, "exit_code"))
+	case "thinking_tokens":
+		return fmt.Sprintf("thinking_tokens: estimated=%d", jsonutil.GetInt(raw, "estimated_tokens"))
+	default:
+		return ""
 	}
 }
 
@@ -124,6 +162,7 @@ var terminalTaskStatuses = map[string]struct{}{
 	"cancelled": {},
 	"canceled":  {},
 	"timeout":   {},
+	"stopped":   {},
 }
 
 // parseBackgroundTasks maps a "background_tasks_changed" event to
@@ -464,4 +503,24 @@ func sanitizeUnknownType(typeStr string) agentrun.MessageType {
 		}
 	}
 	return agentrun.MessageType(typeStr)
+}
+
+// rateLimitSummary synthesizes Content for a bare top-level "rate_limit_event"
+// line, which carries no "message" key of its own — the decision-relevant
+// data lives in its rate_limit_info object instead. Empty for any other
+// typeStr, or when rate_limit_info is absent or malformed.
+func rateLimitSummary(typeStr string, raw map[string]any) string {
+	if typeStr != "rate_limit_event" {
+		return ""
+	}
+	info, ok := raw["rate_limit_info"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	status := jsonutil.GetString(info, "status")
+	kind := jsonutil.GetString(info, "rateLimitType")
+	if status == "" && kind == "" {
+		return ""
+	}
+	return "rate_limit_event: status=" + status + " type=" + kind
 }

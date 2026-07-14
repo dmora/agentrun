@@ -317,6 +317,45 @@ func TestTurnSummaryAdd(t *testing.T) {
 			},
 		},
 		{
+			name: "multi tool_use fan-out captured via Tools",
+			msgs: []Message{
+				{Type: MessageText, Content: "spawning",
+					// Contract: Tool == last Tools entry; both set must not
+					// double-count the last call.
+					Tool: &ToolCall{Name: "Agent", ID: "t3"},
+					Tools: []*ToolCall{
+						{Name: "Agent", ID: "t1"},
+						nil, // defensive: nil entries are skipped
+						{Name: "Agent", ID: "t2"},
+						{Name: "Agent", ID: "t3"},
+					}},
+				{Type: MessageResult, StopReason: StopEndTurn},
+			},
+			check: func(t *testing.T, s *TurnSummary) {
+				if len(s.ToolCalls) != 3 {
+					t.Fatalf("ToolCalls count = %d, want 3 (all Tools entries, no Tool duplicate)", len(s.ToolCalls))
+				}
+				want := []string{"t1", "t2", "t3"}
+				for i, w := range want {
+					if s.ToolCalls[i].ID != w {
+						t.Errorf("ToolCalls[%d].ID = %q, want %q", i, s.ToolCalls[i].ID, w)
+					}
+				}
+			},
+		},
+		{
+			name: "background tasks snapshot not captured as tool calls",
+			msgs: []Message{
+				{Type: MessageBackgroundTasks, Tools: []*ToolCall{{ID: "task1"}, {ID: "task2"}}},
+				{Type: MessageResult, StopReason: StopEndTurn},
+			},
+			check: func(t *testing.T, s *TurnSummary) {
+				if len(s.ToolCalls) != 0 {
+					t.Errorf("ToolCalls count = %d, want 0 (snapshot entries are not invocations)", len(s.ToolCalls))
+				}
+			},
+		},
+		{
 			name: "mixed tool sources no duplicates",
 			msgs: []Message{
 				{Type: MessageText, Content: "text", Tool: &ToolCall{Name: testToolRead}},

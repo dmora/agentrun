@@ -140,6 +140,16 @@ func TestParseSessionUpdate_ToolCallUpdate(t *testing.T) {
 		assertMessage(t, msg, agentrun.MessageToolResult, "")
 		assertToolCall(t, msg, "Run cmd", "", `{"exitCode":0,"stdout":"ok"}`)
 	})
+
+	t.Run("completed_multi_block", func(t *testing.T) {
+		// content is a ToolCallContent[] discriminated union on "type": a
+		// "diff" block carries no text and sits between two "content"
+		// blocks — output must include both, not just the first.
+		update := `{"sessionUpdate":"tool_call_update","toolCallId":"call_003","title":"Multi block","status":"completed","content":[{"type":"content","content":{"type":"text","text":"first"}},{"type":"diff","path":"/tmp/f","newText":"x"},{"type":"content","content":{"type":"text","text":"second"}}]}`
+		msg := parseSessionUpdate(json.RawMessage(update))
+		assertMessage(t, msg, agentrun.MessageToolResult, "")
+		assertToolCall(t, msg, "Multi block", "", `"first\nsecond"`)
+	})
 }
 
 func TestParseSessionUpdate_Plan(t *testing.T) {
