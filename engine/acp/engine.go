@@ -30,6 +30,7 @@ type Engine struct {
 }
 
 var _ agentrun.Engine = (*Engine)(nil)
+var _ agentrun.ModelLister = (*Engine)(nil)
 
 // NewEngine creates an ACP engine. Use EngineOption functions to customize
 // the binary, arguments, buffer sizes, and permission handling.
@@ -41,6 +42,27 @@ func NewEngine(opts ...EngineOption) *Engine {
 func (e *Engine) Validate() error {
 	_, err := e.resolveBinary()
 	return err
+}
+
+// ListModels performs the ACP initialization/session handshake without a model
+// turn and returns the catalog advertised by session/new or session/load.
+func (e *Engine) ListModels(ctx context.Context, session agentrun.Session) ([]agentrun.ModelInfo, error) {
+	session.Model = ""
+	process, err := e.Start(ctx, session)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = process.Stop(context.Background()) }()
+
+	select {
+	case msg, ok := <-process.Output():
+		if !ok || msg.Type != agentrun.MessageInit || msg.Init == nil || len(msg.Init.AvailableModels) == 0 {
+			return nil, agentrun.ErrModelDiscoveryUnsupported
+		}
+		return agentrun.CloneModelCatalog(msg.Init.AvailableModels), nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // resolveBinary checks for a configured binary and resolves it via PATH.

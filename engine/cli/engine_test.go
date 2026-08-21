@@ -107,6 +107,16 @@ type testStreamerOnlyBackend struct {
 	streamFn func(agentrun.Session) (string, []string)
 }
 
+type modelListingBackend struct {
+	*testResumerBackend
+	models []agentrun.ModelInfo
+	err    error
+}
+
+func (b *modelListingBackend) ListModels(context.Context, agentrun.Session) ([]agentrun.ModelInfo, error) {
+	return agentrun.CloneModelCatalog(b.models), b.err
+}
+
 func (b *testStreamerOnlyBackend) StreamArgs(s agentrun.Session) (string, []string) {
 	return b.streamFn(s)
 }
@@ -170,6 +180,54 @@ func withResumer(tb testBackend) *testResumerBackend {
 // ---------------------------------------------------------------------------
 
 var _ agentrun.Engine = (*cli.Engine)(nil)
+var _ agentrun.ModelLister = (*cli.Engine)(nil)
+
+func TestModelDiscoverySelectionAndInitEnrichment(t *testing.T) {
+	base := withResumer(testBackend{
+		spawnFn: func(_ agentrun.Session) (string, []string) {
+			return binPrintf, []string{"init\\n__RESULT__\\n"}
+		},
+		parseFn: func(line string) (agentrun.Message, error) {
+			if line == "init" {
+				return agentrun.Message{Type: agentrun.MessageInit}, nil
+			}
+			return resultParser(line)
+		},
+	})
+	backend := &modelListingBackend{
+		testResumerBackend: base,
+		models:             []agentrun.ModelInfo{{ID: "model-a", Name: "Model A", Aliases: []string{"a"}}},
+	}
+	engine := cli.NewEngine(backend)
+
+	models, err := engine.ListModels(testCtx(t), agentrun.Session{CWD: tempDir(t)})
+	if err != nil || !agentrun.ModelAvailable(models, "a") {
+		t.Fatalf("ListModels = %+v, %v", models, err)
+	}
+	proc, err := engine.Start(testCtx(t), agentrun.Session{CWD: tempDir(t), Model: "a"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	msgs := drain(proc)
+	if len(msgs) < 1 || msgs[0].Init == nil {
+		t.Fatalf("messages = %+v", msgs)
+	}
+	if msgs[0].Init.Model != "a" || !agentrun.ModelAvailable(msgs[0].Init.AvailableModels, "model-a") {
+		t.Fatalf("init = %+v", msgs[0].Init)
+	}
+}
+
+func TestModelDiscoveryRejectsUnsupportedModel(t *testing.T) {
+	backend := &modelListingBackend{
+		testResumerBackend: echoResumerBackend(),
+		models:             []agentrun.ModelInfo{{ID: "model-a"}},
+	}
+	engine := cli.NewEngine(backend)
+	_, err := engine.Start(testCtx(t), agentrun.Session{CWD: tempDir(t), Model: "missing"})
+	if !errors.Is(err, agentrun.ErrModelNotSupported) {
+		t.Fatalf("error = %v, want ErrModelNotSupported", err)
+	}
+}
 
 // ---------------------------------------------------------------------------
 // Validate tests

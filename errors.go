@@ -2,7 +2,9 @@ package agentrun
 
 import (
 	"errors"
+	"fmt"
 	"strconv"
+	"strings"
 )
 
 // Sentinel errors for engine operations.
@@ -28,7 +30,41 @@ var (
 	// terminated before completing its turn. Currently produced only by
 	// CLI engines; ACP turn-completion is handled by RPC response lifecycle.
 	ErrNoResult = errors.New("agentrun: process exited without result")
+
+	// ErrModelDiscoveryUnsupported indicates that a backend or installed
+	// backend version cannot enumerate its available models. Explicit model
+	// selection may still be supported through Session.Model.
+	ErrModelDiscoveryUnsupported = errors.New("agentrun: model discovery unsupported")
+
+	// ErrModelSelectionUnsupported indicates that a backend cannot apply an
+	// explicit Session.Model selection.
+	ErrModelSelectionUnsupported = errors.New("agentrun: model selection unsupported")
+
+	// ErrModelNotSupported indicates that a requested model is not present in
+	// a finite catalog advertised by the backend.
+	ErrModelNotSupported = errors.New("agentrun: model not supported")
 )
+
+// ModelNotSupportedError reports an explicit model selection that is absent
+// from a backend's finite model catalog. Use errors.Is with
+// ErrModelNotSupported or errors.As to inspect the requested model/catalog.
+type ModelNotSupportedError struct {
+	Model     string
+	Available []ModelInfo
+}
+
+func (e *ModelNotSupportedError) Error() string {
+	ids := make([]string, 0, len(e.Available))
+	for _, model := range e.Available {
+		ids = append(ids, model.ID)
+	}
+	if len(ids) == 0 {
+		return fmt.Sprintf("%s: %q", ErrModelNotSupported, e.Model)
+	}
+	return fmt.Sprintf("%s: %q (available: %s)", ErrModelNotSupported, e.Model, strings.Join(ids, ", "))
+}
+
+func (e *ModelNotSupportedError) Unwrap() error { return ErrModelNotSupported }
 
 // ExitError represents a subprocess that exited with a non-zero status.
 // Wraps the underlying error to preserve the error chain — consumers can

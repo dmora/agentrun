@@ -23,6 +23,7 @@ type Engine struct {
 
 // Compile-time interface satisfaction check.
 var _ agentrun.Engine = (*Engine)(nil)
+var _ agentrun.ModelLister = (*Engine)(nil)
 
 // NewEngine creates a CLI engine backed by the given Backend.
 // Use EngineOption functions to customize buffer sizes and grace period.
@@ -49,12 +50,25 @@ func (e *Engine) Validate() (retErr error) {
 	return nil
 }
 
+// ListModels delegates to an optional backend discovery capability.
+func (e *Engine) ListModels(ctx context.Context, session agentrun.Session) ([]agentrun.ModelInfo, error) {
+	lister, ok := e.backend.(agentrun.ModelLister)
+	if !ok {
+		return nil, agentrun.ErrModelDiscoveryUnsupported
+	}
+	models, err := lister.ListModels(ctx, session.Clone())
+	if err != nil {
+		return nil, err
+	}
+	return agentrun.CloneModelCatalog(models), nil
+}
+
 // Start initializes a subprocess session and returns a Process handle.
 // Returns [agentrun.ErrSendNotSupported] if the backend lacks a send path
 // (neither Streamer+InputFormatter nor Resumer).
 // The context parameter is reserved for future use (e.g., start timeout);
 // subprocess lifetime is controlled via [agentrun.Process.Stop].
-func (e *Engine) Start(_ context.Context, session agentrun.Session, opts ...agentrun.Option) (agentrun.Process, error) {
+func (e *Engine) Start(ctx context.Context, session agentrun.Session, opts ...agentrun.Option) (agentrun.Process, error) {
 	startOpts := agentrun.ResolveOptions(opts...)
 
 	// Deep-copy session to prevent aliasing.
@@ -115,12 +129,27 @@ func (e *Engine) Start(_ context.Context, session agentrun.Session, opts ...agen
 	}
 	env := agentrun.MergeEnv(os.Environ(), session.Env)
 
+	// Discovery is optional. A backend/version that cannot enumerate models
+	// remains compatible and still receives Session.Model through native args.
+	var models []agentrun.ModelInfo
+	if caps.modelLister != nil {
+		discovered, discoverErr := caps.modelLister.ListModels(ctx, session)
+		if discoverErr == nil {
+			models = discovered
+			if err := agentrun.ValidateModelSelection(models, session.Model); err != nil {
+				return nil, err
+			}
+		} else if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+	}
+
 	cmd, stdin, stdout, err := spawnCmd(resolvedBinary, args, session.CWD, useStreamer, env, e.opts.StderrWriter)
 	if err != nil {
 		return nil, fmt.Errorf("cli: start: %w", err)
 	}
 
-	p := newProcess(e.backend, caps, session, e.opts, env, cmd, stdin, stdout)
+	p := newProcess(e.backend, caps, session, e.opts, env, models, cmd, stdin, stdout)
 	if caps.resumer != nil && !useStreamer {
 		return &sequentialProcess{p}, nil
 	}

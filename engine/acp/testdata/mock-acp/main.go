@@ -133,6 +133,13 @@ func handleSessionNew(req *rpcRequest) {
 
 	respond(req.ID, map[string]any{
 		"sessionId": sessionID,
+		"models": map[string]any{
+			"currentModelId": "default-model",
+			"availableModels": []map[string]string{
+				{"id": "default-model", "name": "Default", "description": "Balanced"},
+				{"id": "big-model", "name": "Big", "description": "Most capable"},
+			},
+		},
 		"modes": map[string]any{
 			"currentModeId": "code",
 			"availableModes": []map[string]string{
@@ -172,13 +179,32 @@ func handleSessionLoad(req *rpcRequest) {
 	}
 	// LoadSessionResult has NO sessionId field.
 	respond(req.ID, map[string]any{
+		"models": map[string]any{
+			"currentModelId": "default-model",
+			"availableModels": []map[string]string{
+				{"id": "default-model", "name": "Default", "description": "Balanced"},
+				{"id": "big-model", "name": "Big", "description": "Most capable"},
+			},
+		},
 		"modes": map[string]any{
 			"currentModeId": "code",
 			"availableModes": []map[string]string{
 				{"id": "code", "name": "Code"},
 			},
 		},
-		"configOptions": []map[string]any{},
+		"configOptions": []map[string]any{
+			{
+				"id":           "model",
+				"name":         "Model",
+				"category":     "model",
+				"type":         "select",
+				"currentValue": "default-model",
+				"options": []map[string]string{
+					{"value": "default-model", "name": "Default"},
+					{"value": "big-model", "name": "Big"},
+				},
+			},
+		},
 	})
 }
 
@@ -302,8 +328,18 @@ func handleSetConfigOption(req *rpcRequest) {
 		respondError(req.ID, -32000, "mock set_config_option error")
 		return
 	}
+	var params struct {
+		Value string `json:"value"`
+	}
+	_ = json.Unmarshal(req.Params, &params)
 	respond(req.ID, map[string]any{
-		"configOptions": []map[string]any{},
+		"configOptions": []map[string]any{{
+			"id":           "model",
+			"name":         "Model",
+			"category":     "model",
+			"type":         "select",
+			"currentValue": params.Value,
+		}},
 	})
 }
 

@@ -21,10 +21,11 @@ import (
 // capabilities holds resolved optional interfaces for a process.
 // Resolved once in Engine.Start to eliminate process→engine back-references.
 type capabilities struct {
-	resumer   Resumer
-	streamer  Streamer
-	formatter InputFormatter
-	shellFeed bool // ShellFeedBackend presence; gates WithShellTracking, see scanLines
+	resumer     Resumer
+	streamer    Streamer
+	formatter   InputFormatter
+	modelLister agentrun.ModelLister
+	shellFeed   bool // ShellFeedBackend presence; gates WithShellTracking, see scanLines
 }
 
 func resolveCapabilities(backend Backend) capabilities {
@@ -37,6 +38,9 @@ func resolveCapabilities(backend Backend) capabilities {
 	}
 	if f, ok := backend.(InputFormatter); ok {
 		caps.formatter = f
+	}
+	if l, ok := backend.(agentrun.ModelLister); ok {
+		caps.modelLister = l
 	}
 	if _, ok := backend.(ShellFeedBackend); ok {
 		caps.shellFeed = true
@@ -61,6 +65,7 @@ type process struct {
 	session agentrun.Session
 	opts    EngineOptions
 	env     []string // resolved env for subprocess; nil = inherit parent
+	models  []agentrun.ModelInfo
 
 	output chan agentrun.Message
 
@@ -99,6 +104,7 @@ func newProcess(
 	session agentrun.Session,
 	opts EngineOptions,
 	env []string,
+	models []agentrun.ModelInfo,
 	cmd *exec.Cmd,
 	stdin io.WriteCloser,
 	stdout io.ReadCloser,
@@ -111,6 +117,7 @@ func newProcess(
 		session:    session,
 		opts:       opts,
 		env:        env,
+		models:     agentrun.CloneModelCatalog(models),
 		output:     make(chan agentrun.Message, opts.OutputBuffer),
 		cmd:        cmd,
 		stdin:      stdin,
@@ -463,6 +470,15 @@ func (p *process) enrichMessage(msg *agentrun.Message, lastStopReason agentrun.S
 	lastStopReason = applyStopReasonCarryForward(msg, lastStopReason)
 	if msg.Type == agentrun.MessageInit {
 		msg.Process = p.processMetaSnapshot()
+		if msg.Init == nil && (p.session.Model != "" || len(p.models) > 0) {
+			msg.Init = &agentrun.InitMeta{}
+		}
+		if msg.Init != nil {
+			if msg.Init.Model == "" && p.session.Model != "" {
+				msg.Init.Model = p.session.Model
+			}
+			msg.Init.AvailableModels = agentrun.CloneModelCatalog(p.models)
+		}
 	}
 	maxCallFill = applyContextFill(msg, maxCallFill)
 	if msg.Type == agentrun.MessageResult {
