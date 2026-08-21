@@ -691,31 +691,78 @@ func sessionConfigCalls(sessionID string, session agentrun.Session, modes *sessi
 		}
 	}
 
+	// Explicit ACP config options. IDs and values are opaque: callers choose
+	// from the options advertised by the agent, and the engine only transports
+	// them. Session.Model remains authoritative for the model category.
+	for _, opt := range configOptions {
+		if opt.Category == "model" && session.Model != "" {
+			continue
+		}
+		key := SessionConfigOption(opt.ID)
+		if key == "" {
+			continue
+		}
+		if value := session.Options[key]; value != "" {
+			calls = append(calls, configCall{
+				Method: MethodSessionSetConfig,
+				Params: setConfigOptionParams{SessionID: sessionID, ConfigID: opt.ID, Value: value},
+			})
+		}
+	}
+
 	return calls
+}
+
+func publicConfigOptionModels(opt sessionConfigOption) []agentrun.ModelInfo {
+	models := make([]agentrun.ModelInfo, 0, len(opt.Options))
+	for _, choice := range opt.Options {
+		if choice.Value == "" {
+			continue
+		}
+		models = append(models, agentrun.ModelInfo{ID: choice.Value, Name: choice.Name})
+	}
+	return models
+}
+
+func configOptionCategory(configOptions []sessionConfigOption, id string) string {
+	for _, opt := range configOptions {
+		if opt.ID == id {
+			return opt.Category
+		}
+	}
+	return ""
+}
+
+func validateSessionModel(model string, models *sessionModelState, configOptions []sessionConfigOption) error {
+	if model == "" {
+		return nil
+	}
+	for _, opt := range configOptions {
+		if opt.Category != "model" {
+			continue
+		}
+		if available := publicConfigOptionModels(opt); len(available) > 0 {
+			return agentrun.ValidateModelSelection(available, model)
+		}
+		return nil
+	}
+	if models != nil {
+		if err := agentrun.ValidateModelSelection(publicModels(models.AvailableModels), model); err != nil {
+			return err
+		}
+	}
+	if models == nil || models.CurrentModelID != model {
+		return fmt.Errorf("%w: ACP agent did not advertise a model config option", agentrun.ErrModelSelectionUnsupported)
+	}
+	return nil
 }
 
 // applySessionConfig applies mode and model settings after session creation.
 // Both failures are fatal: mode is a security boundary, while a successful
 // model selection is required before InitMeta can report an effective model.
 func (p *process) applySessionConfig(ctx context.Context, session agentrun.Session, models *sessionModelState, modes *sessionModeState, configOptions []sessionConfigOption) (string, error) {
-	if session.Model != "" {
-		if models != nil {
-			if err := agentrun.ValidateModelSelection(publicModels(models.AvailableModels), session.Model); err != nil {
-				return "", err
-			}
-		}
-		hasModelOption := false
-		for _, opt := range configOptions {
-			if opt.Category == "model" {
-				hasModelOption = true
-				break
-			}
-		}
-		if !hasModelOption {
-			if models == nil || models.CurrentModelID != session.Model {
-				return "", fmt.Errorf("%w: ACP agent did not advertise a model config option", agentrun.ErrModelSelectionUnsupported)
-			}
-		}
+	if err := validateSessionModel(session.Model, models, configOptions); err != nil {
+		return "", err
 	}
 
 	calls := sessionConfigCalls(p.sessionID, session, modes, configOptions)
@@ -730,12 +777,14 @@ func (p *process) applySessionConfig(ctx context.Context, session agentrun.Sessi
 			if err != nil {
 				return "", fmt.Errorf("acp: session/set_config_option: %w", err)
 			}
-			effectiveModel = session.Model
 			params := c.Params.(setConfigOptionParams)
-			for _, opt := range result.ConfigOptions {
-				if opt.ID == params.ConfigID && opt.CurrentValue != "" {
-					effectiveModel = opt.CurrentValue
-					break
+			if configOptionCategory(configOptions, params.ConfigID) == "model" {
+				effectiveModel = session.Model
+				for _, opt := range result.ConfigOptions {
+					if opt.ID == params.ConfigID && opt.CurrentValue != "" {
+						effectiveModel = opt.CurrentValue
+						break
+					}
 				}
 			}
 			continue
