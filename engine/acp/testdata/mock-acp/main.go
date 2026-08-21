@@ -136,8 +136,8 @@ func handleSessionNew(req *rpcRequest) {
 		"models": map[string]any{
 			"currentModelId": "default-model",
 			"availableModels": []map[string]string{
-				{"id": "default-model", "name": "Default", "description": "Balanced"},
-				{"id": "big-model", "name": "Big", "description": "Most capable"},
+				{"modelId": "default-model", "name": "Default", "description": "Balanced"},
+				{"modelId": "big-model", "name": "Big", "description": "Most capable"},
 			},
 		},
 		"modes": map[string]any{
@@ -182,8 +182,8 @@ func handleSessionLoad(req *rpcRequest) {
 		"models": map[string]any{
 			"currentModelId": "default-model",
 			"availableModels": []map[string]string{
-				{"id": "default-model", "name": "Default", "description": "Balanced"},
-				{"id": "big-model", "name": "Big", "description": "Most capable"},
+				{"modelId": "default-model", "name": "Default", "description": "Balanced"},
+				{"modelId": "big-model", "name": "Big", "description": "Most capable"},
 			},
 		},
 		"modes": map[string]any{

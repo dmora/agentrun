@@ -130,7 +130,7 @@ type sessionModelState struct {
 
 // modelInfo describes a model available to the agent.
 type modelInfo struct {
-	ID          string `json:"id"`
+	ID          string `json:"modelId"`
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 }
