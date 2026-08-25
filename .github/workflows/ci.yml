@@ -27,6 +27,19 @@ jobs:
       - run: go test -race -v -coverprofile=coverage.out -covermode=atomic ./...
       - name: Build examples
         run: cd examples && go build ./...
+      # cmd/agentrun-mcp es un modulo aparte que SI se publica via `go install @latest`.
+      # Se construye dos veces a proposito:
+      #   1. standalone -> prueba que su go.mod es instalable (sin `replace` al padre).
+      #      Un `replace` aqui rompe `go install @latest` y CI no lo veia.
+      #   2. con go.work -> prueba que sigue compilando contra el codigo de ESTE commit,
+      #      no contra la version publicada que declara su require.
+      - name: Build MCP server (standalone, como lo ve `go install @latest`)
+        run: cd cmd/agentrun-mcp && go build ./...
+      - name: Build MCP server (contra el working tree)
+        run: |
+          go work init . ./cmd/agentrun-mcp
+          go build ./cmd/agentrun-mcp/...
+          rm go.work
       - name: Upload coverage
         if: matrix.go == '1.26' && env.CODECOV_TOKEN != ''
         uses: codecov/codecov-action@v5

@@ -1,3 +1,5 @@
+github.com/dmora/agentrun v0.9.0 h1:VzabbwYTQ8PWXbSFy8wIb7775XlPRt5gZ2grKE6uGXo=
+github.com/dmora/agentrun v0.9.0/go.mod h1:2WcImssNhDqyvmlZQ9duva4kWmzhLGKn0hNDiqO/eKE=
 github.com/golang-jwt/jwt/v5 v5.3.0 h1:pv4AsKCKKZuqlgs5sUmn4x8UlGa0kEVt/puTpKx9vvo=
 github.com/golang-jwt/jwt/v5 v5.3.0/go.mod h1:fxCRLWMO43lRc8nhHWY6LGqRcf+1gQWArsqaEUEa5bE=
 github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
