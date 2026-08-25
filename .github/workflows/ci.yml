@@ -33,8 +33,18 @@ jobs:
       #      Un `replace` aqui rompe `go install @latest` y CI no lo veia.
       #   2. con go.work -> prueba que sigue compilando contra el codigo de ESTE commit,
       #      no contra la version publicada que declara su require.
-      - name: Build MCP server (standalone, como lo ve `go install @latest`)
-        run: cd cmd/agentrun-mcp && go build ./...
+      # `go build` dentro del modulo NO sirve como guard: lo trata como main
+      # module, asi que un `replace` reintroducido resuelve bien y pasa verde
+      # mientras `go install @latest` sigue roto. Hay que assertar su ausencia.
+      - name: Assert que cmd/agentrun-mcp es instalable (sin `replace`)
+        run: |
+          n=$(go mod edit -json cmd/agentrun-mcp/go.mod | jq '.Replace | length')
+          if [ "$n" -ne 0 ]; then
+            echo "::error file=cmd/agentrun-mcp/go.mod::$n replace directive(s); go install @latest los rechaza"
+            go mod edit -json cmd/agentrun-mcp/go.mod | jq '.Replace'
+            exit 1
+          fi
+          cd cmd/agentrun-mcp && go build ./...
       - name: Build MCP server (contra el working tree)
         run: |
           go work init . ./cmd/agentrun-mcp
