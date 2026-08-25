@@ -52,7 +52,7 @@ jobs:
           rm go.work
       - name: Upload coverage
         if: matrix.go == '1.26' && env.CODECOV_TOKEN != ''
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           files: coverage.out
         env:
