@@ -2,10 +2,8 @@ module github.com/dmora/agentrun/cmd/agentrun-mcp
 
 go 1.24.0
 
-replace github.com/dmora/agentrun => ../../
-
 require (
-	github.com/dmora/agentrun v0.0.0
+	github.com/dmora/agentrun v0.9.0
 	github.com/modelcontextprotocol/go-sdk v1.4.0
 )
 
