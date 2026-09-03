@@ -18,3 +18,13 @@ type Engine interface {
 	// For API engines, this checks connectivity and authentication.
 	Validate() error
 }
+
+// ModelLister is an optional engine capability for discovering the models
+// available in the current backend authentication and provider environment.
+// Engines that cannot enumerate models return ErrModelDiscoveryUnsupported.
+//
+// The session supplies the same CWD, environment, and backend options that
+// would be used by Start. Implementations must not run a model turn.
+type ModelLister interface {
+	ListModels(ctx context.Context, session Session) ([]ModelInfo, error)
+}

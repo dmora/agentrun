@@ -517,16 +517,38 @@ func buildInitMeta(initResult *initializeResult, models *sessionModelState) *age
 	if models != nil && models.CurrentModelID != "" {
 		meta.Model = errfmt.SanitizeCode(models.CurrentModelID)
 	}
+	if models != nil {
+		meta.AvailableModels = publicModels(models.AvailableModels)
+	}
 
 	// Nil-guard: only return non-nil when at least one field is set.
-	if meta.Model == "" && meta.AgentName == "" && meta.AgentVersion == "" {
+	if meta.Model == "" && meta.AgentName == "" && meta.AgentVersion == "" && len(meta.AvailableModels) == 0 {
 		return nil
 	}
 	return &meta
 }
 
-// handshake performs initialize + session/new (or session/load) and emits MessageInit.
-// After emitting MessageInit, applies session configuration (mode, model).
+func publicModels(models []modelInfo) []agentrun.ModelInfo {
+	result := make([]agentrun.ModelInfo, 0, len(models))
+	for _, model := range models {
+		id := errfmt.SanitizeCode(model.ID)
+		if id == "" {
+			continue
+		}
+		result = append(result, agentrun.ModelInfo{
+			ID:          id,
+			Name:        errfmt.SanitizeCode(model.Name),
+			Description: errfmt.Truncate(model.Description),
+		})
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+// handshake performs initialize + session/new (or session/load), applies
+// session configuration, and then emits MessageInit with effective metadata.
 func (p *process) handshake(ctx context.Context, session agentrun.Session) error {
 	// Step 1: Initialize.
 	initParams := initializeParams{
@@ -557,7 +579,20 @@ func (p *process) handshake(ctx context.Context, session agentrun.Session) error
 	}
 	p.sessionID = hr.sessionID
 
-	// Step 3: Emit MessageInit (before config application — consumers need session ID).
+	// Step 3: Validate and apply session configuration before publishing init,
+	// so InitMeta.Model is always the effective model for the first turn.
+	effectiveModel, err := p.applySessionConfig(ctx, session, hr.models, hr.modes, hr.configOptions)
+	if err != nil {
+		return err
+	}
+	if effectiveModel != "" {
+		if hr.models == nil {
+			hr.models = &sessionModelState{}
+		}
+		hr.models.CurrentModelID = effectiveModel
+	}
+
+	// Step 4: Emit MessageInit after configuration is effective.
 	p.emit(agentrun.Message{
 		Type:      agentrun.MessageInit,
 		ResumeID:  p.sessionID,
@@ -565,9 +600,7 @@ func (p *process) handshake(ctx context.Context, session agentrun.Session) error
 		Process:   p.processMetaSnapshot(),
 		Timestamp: time.Now(),
 	})
-
-	// Step 4: Apply session configuration.
-	return p.applySessionConfig(ctx, session, hr.modes, hr.configOptions)
+	return nil
 }
 
 // resumeSession loads an existing session by ID.
@@ -658,30 +691,112 @@ func sessionConfigCalls(sessionID string, session agentrun.Session, modes *sessi
 		}
 	}
 
-	return calls
-}
-
-// applySessionConfig applies mode and model settings after session creation.
-// session/set_mode failure is fatal (security boundary).
-// session/set_config_option failure is non-fatal (emits MessageError).
-func (p *process) applySessionConfig(ctx context.Context, session agentrun.Session, modes *sessionModeState, configOptions []sessionConfigOption) error {
-	calls := sessionConfigCalls(p.sessionID, session, modes, configOptions)
-	for _, c := range calls {
-		var result json.RawMessage
-		err := p.conn.Call(ctx, c.Method, c.Params, &result)
-		if err != nil {
-			if c.Method == MethodSessionSetMode {
-				return fmt.Errorf("acp: session/set_mode failed (security-critical): %w", err)
-			}
-			// Non-fatal: emit error and continue.
-			p.emit(agentrun.Message{
-				Type:      agentrun.MessageError,
-				Content:   fmt.Sprintf("acp: %s: %v", c.Method, err),
-				Timestamp: time.Now(),
+	// Explicit ACP config options. IDs and values are opaque: callers choose
+	// from the options advertised by the agent, and the engine only transports
+	// them. Session.Model remains authoritative for the model category.
+	for _, opt := range configOptions {
+		if opt.Category == "model" && session.Model != "" {
+			continue
+		}
+		key := SessionConfigOption(opt.ID)
+		if key == "" {
+			continue
+		}
+		if value := session.Options[key]; value != "" {
+			calls = append(calls, configCall{
+				Method: MethodSessionSetConfig,
+				Params: setConfigOptionParams{SessionID: sessionID, ConfigID: opt.ID, Value: value},
 			})
 		}
 	}
+
+	return calls
+}
+
+func publicConfigOptionModels(opt sessionConfigOption) []agentrun.ModelInfo {
+	models := make([]agentrun.ModelInfo, 0, len(opt.Options))
+	for _, choice := range opt.Options {
+		if choice.Value == "" {
+			continue
+		}
+		models = append(models, agentrun.ModelInfo{ID: choice.Value, Name: choice.Name})
+	}
+	return models
+}
+
+func configOptionCategory(configOptions []sessionConfigOption, id string) string {
+	for _, opt := range configOptions {
+		if opt.ID == id {
+			return opt.Category
+		}
+	}
+	return ""
+}
+
+func validateSessionModel(model string, models *sessionModelState, configOptions []sessionConfigOption) error {
+	if model == "" {
+		return nil
+	}
+	for _, opt := range configOptions {
+		if opt.Category != "model" {
+			continue
+		}
+		if available := publicConfigOptionModels(opt); len(available) > 0 {
+			return agentrun.ValidateModelSelection(available, model)
+		}
+		return nil
+	}
+	if models != nil {
+		if err := agentrun.ValidateModelSelection(publicModels(models.AvailableModels), model); err != nil {
+			return err
+		}
+	}
+	if models == nil || models.CurrentModelID != model {
+		return fmt.Errorf("%w: ACP agent did not advertise a model config option", agentrun.ErrModelSelectionUnsupported)
+	}
 	return nil
+}
+
+// applySessionConfig applies mode and model settings after session creation.
+// Both failures are fatal: mode is a security boundary, while a successful
+// model selection is required before InitMeta can report an effective model.
+func (p *process) applySessionConfig(ctx context.Context, session agentrun.Session, models *sessionModelState, modes *sessionModeState, configOptions []sessionConfigOption) (string, error) {
+	if err := validateSessionModel(session.Model, models, configOptions); err != nil {
+		return "", err
+	}
+
+	calls := sessionConfigCalls(p.sessionID, session, modes, configOptions)
+	effectiveModel := ""
+	if models != nil {
+		effectiveModel = models.CurrentModelID
+	}
+	for _, c := range calls {
+		if c.Method == MethodSessionSetConfig {
+			var result setConfigOptionResult
+			err := p.conn.Call(ctx, c.Method, c.Params, &result)
+			if err != nil {
+				return "", fmt.Errorf("acp: session/set_config_option: %w", err)
+			}
+			params := c.Params.(setConfigOptionParams)
+			if configOptionCategory(configOptions, params.ConfigID) == "model" {
+				effectiveModel = session.Model
+				for _, opt := range result.ConfigOptions {
+					if opt.ID == params.ConfigID && opt.CurrentValue != "" {
+						effectiveModel = opt.CurrentValue
+						break
+					}
+				}
+			}
+			continue
+		}
+
+		var result json.RawMessage
+		err := p.conn.Call(ctx, c.Method, c.Params, &result)
+		if err != nil {
+			return "", fmt.Errorf("acp: session/set_mode failed (security-critical): %w", err)
+		}
+	}
+	return effectiveModel, nil
 }
 
 // --- Permission handling ---

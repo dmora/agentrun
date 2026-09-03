@@ -478,7 +478,7 @@ func TestEngine_SetMode_Fatal(t *testing.T) {
 	}
 }
 
-func TestEngine_SetConfigOption_NonFatal(t *testing.T) {
+func TestEngine_SetConfigOption_Fatal(t *testing.T) {
 	wrapper := writeScript(t, "set-config-fail")
 	engine := acp.NewEngine(acp.WithBinary(wrapper))
 
@@ -487,28 +487,93 @@ func TestEngine_SetConfigOption_NonFatal(t *testing.T) {
 
 	session := agentrun.Session{
 		CWD:   t.TempDir(),
-		Model: "some-model",
+		Model: "big-model",
 	}
 
-	proc, err := engine.Start(ctx, session)
+	_, err := engine.Start(ctx, session)
+	if err == nil {
+		t.Fatal("expected model selection failure")
+	}
+	if !strings.Contains(err.Error(), "set_config_option") {
+		t.Errorf("error = %v, want to contain 'set_config_option'", err)
+	}
+}
+
+func TestEngine_ModelCatalogAndSelection(t *testing.T) {
+	wrapper := writeScript(t, "")
+	engine := acp.NewEngine(acp.WithBinary(wrapper))
+	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	defer cancel()
+
+	proc, err := engine.Start(ctx, agentrun.Session{CWD: t.TempDir(), Model: "big-model"})
 	if err != nil {
-		t.Fatalf("start should succeed despite config fail: %v", err)
+		t.Fatalf("Start: %v", err)
 	}
 	t.Cleanup(func() { _ = proc.Stop(context.Background()) })
 
-	// Should get MessageInit followed by MessageError about config option.
 	msg := <-proc.Output()
-	if msg.Type != agentrun.MessageInit {
-		t.Fatalf("first message type = %q, want %q", msg.Type, agentrun.MessageInit)
+	if msg.Type != agentrun.MessageInit || msg.Init == nil {
+		t.Fatalf("init = %+v", msg)
 	}
+	if msg.Init.Model != "big-model" {
+		t.Errorf("effective model = %q, want big-model", msg.Init.Model)
+	}
+	if !agentrun.ModelAvailable(msg.Init.AvailableModels, "big-model") {
+		t.Errorf("catalog = %+v, want big-model", msg.Init.AvailableModels)
+	}
+}
 
-	// The MessageError about config option failure may be next.
-	msg2 := <-proc.Output()
-	if msg2.Type != agentrun.MessageError {
-		t.Errorf("second message type = %q, want %q", msg2.Type, agentrun.MessageError)
+func TestEngine_UnsupportedModelTypedError(t *testing.T) {
+	wrapper := writeScript(t, "")
+	engine := acp.NewEngine(acp.WithBinary(wrapper))
+	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	defer cancel()
+
+	_, err := engine.Start(ctx, agentrun.Session{CWD: t.TempDir(), Model: "missing-model"})
+	if !errors.Is(err, agentrun.ErrModelNotSupported) {
+		t.Fatalf("error = %v, want ErrModelNotSupported", err)
 	}
-	if !strings.Contains(msg2.Content, "set_config_option") {
-		t.Errorf("error content = %q, want to contain 'set_config_option'", msg2.Content)
+	var modelErr *agentrun.ModelNotSupportedError
+	if !errors.As(err, &modelErr) || modelErr.Model != "missing-model" {
+		t.Fatalf("typed error = %#v", modelErr)
+	}
+}
+
+func TestEngine_ListModels(t *testing.T) {
+	wrapper := writeScript(t, "")
+	engine := acp.NewEngine(acp.WithBinary(wrapper))
+	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	defer cancel()
+
+	models, err := engine.ListModels(ctx, agentrun.Session{CWD: t.TempDir()})
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	if !agentrun.ModelAvailable(models, "default-model") || !agentrun.ModelAvailable(models, "big-model") {
+		t.Fatalf("models = %+v", models)
+	}
+}
+
+func TestEngine_ResumeModelSelection(t *testing.T) {
+	wrapper := writeScript(t, "")
+	engine := acp.NewEngine(acp.WithBinary(wrapper))
+	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	defer cancel()
+
+	proc, err := engine.Start(ctx, agentrun.Session{
+		CWD:   t.TempDir(),
+		Model: "big-model",
+		Options: map[string]string{
+			agentrun.OptionResumeID: "mock-session-001",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start resume: %v", err)
+	}
+	t.Cleanup(func() { _ = proc.Stop(context.Background()) })
+	msg := <-proc.Output()
+	if msg.Init == nil || msg.Init.Model != "big-model" {
+		t.Fatalf("resume init = %+v", msg.Init)
 	}
 }
 

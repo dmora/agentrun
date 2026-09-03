@@ -1,6 +1,7 @@
 package acp
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/dmora/agentrun"
@@ -86,6 +87,78 @@ func TestSessionConfigCalls_ModelSetting(t *testing.T) {
 	}
 	if p.Value != "gpt-4" {
 		t.Errorf("value = %q, want %q", p.Value, "gpt-4")
+	}
+}
+
+func TestSessionConfigCalls_OpaqueAdvertisedOption(t *testing.T) {
+	session := agentrun.Session{Options: map[string]string{
+		SessionConfigOption("quality"): "thorough",
+	}}
+	opts := []sessionConfigOption{
+		{ID: "quality", Name: "Quality", Options: []configOptionChoice{{Value: "fast"}, {Value: "thorough"}}},
+	}
+	calls := sessionConfigCalls("test-session", session, nil, opts)
+	if len(calls) != 1 {
+		t.Fatalf("got %d calls, want 1", len(calls))
+	}
+	p := calls[0].Params.(setConfigOptionParams)
+	if p.ConfigID != "quality" || p.Value != "thorough" {
+		t.Fatalf("params = %#v, want quality=thorough", p)
+	}
+}
+
+func TestSessionConfigCalls_UnadvertisedOpaqueOptionSkipped(t *testing.T) {
+	session := agentrun.Session{Options: map[string]string{
+		SessionConfigOption("missing"): "value",
+	}}
+	if calls := sessionConfigCalls("test-session", session, nil, nil); len(calls) != 0 {
+		t.Fatalf("got %d calls, want 0", len(calls))
+	}
+}
+
+func TestPublicConfigOptionModels(t *testing.T) {
+	models := publicConfigOptionModels(sessionConfigOption{Options: []configOptionChoice{
+		{Value: "base-model", Name: "Base Model"},
+		{Value: "", Name: "Invalid"},
+	}})
+	if len(models) != 1 || models[0].ID != "base-model" || models[0].Name != "Base Model" {
+		t.Fatalf("models = %#v", models)
+	}
+}
+
+func TestConfigOptionCategory(t *testing.T) {
+	opts := []sessionConfigOption{
+		{ID: "model-id", Category: "model"},
+		{ID: "quality-id", Category: "_quality"},
+	}
+	if got := configOptionCategory(opts, "model-id"); got != "model" {
+		t.Fatalf("model category = %q", got)
+	}
+	if got := configOptionCategory(opts, "quality-id"); got != "_quality" {
+		t.Fatalf("quality category = %q", got)
+	}
+	if got := configOptionCategory(opts, "missing"); got != "" {
+		t.Fatalf("missing category = %q", got)
+	}
+}
+
+func TestValidateSessionModelUsesAdvertisedModelConfig(t *testing.T) {
+	models := &sessionModelState{
+		CurrentModelID: "base-model[medium]",
+		AvailableModels: []modelInfo{
+			{ID: "base-model[low]"},
+			{ID: "base-model[medium]"},
+		},
+	}
+	configOptions := []sessionConfigOption{{
+		ID: "model", Category: "model",
+		Options: []configOptionChoice{{Value: "base-model", Name: "Base Model"}},
+	}}
+	if err := validateSessionModel("base-model", models, configOptions); err != nil {
+		t.Fatalf("validate base model: %v", err)
+	}
+	if err := validateSessionModel("missing-model", models, configOptions); err == nil || !strings.Contains(err.Error(), "not supported") {
+		t.Fatalf("validate missing model error = %v", err)
 	}
 }
 

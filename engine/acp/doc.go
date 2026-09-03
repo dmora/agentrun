@@ -11,5 +11,11 @@
 // by binary name.
 //
 //	engine := acp.NewEngine(acp.WithBinary("opencode"), acp.WithArgs("acp"))
+//	models, err := engine.ListModels(ctx, session)
 //	proc, err := engine.Start(ctx, session)
+//
+// Model catalogs from session/new and session/load are exposed through
+// [agentrun.ModelLister] and [agentrun.InitMeta.AvailableModels]. Explicit
+// Session.Model selection is validated against finite catalogs, applied before
+// MessageInit, and reported as the effective [agentrun.InitMeta.Model].
 package acp

@@ -3,8 +3,25 @@ package acp
 import (
 	"context"
 	"io"
+	"strings"
 	"time"
 )
+
+const sessionConfigOptionPrefix = "acp.session_config."
+
+// SessionConfigOption returns the Session.Options key for an ACP session
+// config option advertised by the agent. The option ID and value are treated
+// as opaque ACP protocol values; the engine does not interpret their meaning.
+//
+// Unknown or unadvertised option IDs are ignored. An empty ID returns an empty
+// key so callers can reject it before adding it to Session.Options.
+func SessionConfigOption(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ""
+	}
+	return sessionConfigOptionPrefix + id
+}
 
 // Default engine configuration values.
 const (

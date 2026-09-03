@@ -130,8 +130,9 @@ type sessionModelState struct {
 
 // modelInfo describes a model available to the agent.
 type modelInfo struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID          string `json:"modelId"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
 }
 
 // sessionConfigOption describes a configurable session option.
@@ -254,4 +255,8 @@ type setConfigOptionParams struct {
 	SessionID string `json:"sessionId"`
 	ConfigID  string `json:"configId"`
 	Value     string `json:"value"`
+}
+
+type setConfigOptionResult struct {
+	ConfigOptions []sessionConfigOption `json:"configOptions"`
 }

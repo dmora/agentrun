@@ -1,17 +1,24 @@
 package claude
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/dmora/agentrun"
 	"github.com/dmora/agentrun/engine/cli"
 	"github.com/dmora/agentrun/engine/cli/internal/jsonutil"
 	"github.com/dmora/agentrun/engine/cli/internal/optutil"
+	"github.com/dmora/agentrun/engine/internal/errfmt"
 )
 
 // Session option keys specific to the Claude CLI backend.
@@ -90,6 +97,7 @@ var (
 	_ cli.InputFormatter   = (*Backend)(nil)
 	_ cli.BlockFormatter   = (*Backend)(nil)
 	_ cli.ShellFeedBackend = (*Backend)(nil)
+	_ agentrun.ModelLister = (*Backend)(nil)
 )
 
 // Option configures a Backend at construction time.
@@ -123,6 +131,111 @@ func New(opts ...Option) *Backend {
 		opt(b)
 	}
 	return b
+}
+
+// ListModels uses Claude Code's supported stream-json control protocol. It
+// sends an initialize control request and reads the authenticated/provider-
+// specific model catalog without launching a model turn.
+func (b *Backend) ListModels(ctx context.Context, session agentrun.Session) ([]agentrun.ModelInfo, error) {
+	if session.CWD != "" && !filepath.IsAbs(session.CWD) {
+		return nil, fmt.Errorf("claude: model discovery CWD must be an absolute path, got %q", session.CWD)
+	}
+	if session.CWD != "" {
+		if info, err := os.Stat(session.CWD); err != nil {
+			return nil, fmt.Errorf("claude: model discovery CWD: %w", err)
+		} else if !info.IsDir() {
+			return nil, fmt.Errorf("claude: model discovery CWD is not a directory: %s", session.CWD)
+		}
+	}
+	if err := agentrun.ValidateEnv(session.Env); err != nil {
+		return nil, fmt.Errorf("claude: model discovery: %w", err)
+	}
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+	}
+
+	resolved, err := exec.LookPath(b.binary)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s: %w", agentrun.ErrUnavailable, b.binary, err)
+	}
+	args := append(baseArgs(), "--input-format", "stream-json", "--no-session-persistence")
+	cmd := exec.CommandContext(ctx, resolved, args...)
+	if session.CWD != "" {
+		cmd.Dir = session.CWD
+	}
+	cmd.Env = agentrun.MergeEnv(os.Environ(), session.Env)
+	request := []byte(`{"type":"control_request","request_id":"agentrun-models","request":{"subtype":"initialize"}}` + "\n")
+	cmd.Stdin = bytes.NewReader(request)
+	output, runErr := cmd.Output()
+
+	models, found, parseErr := parseModelDiscovery(output)
+	if parseErr != nil {
+		return nil, parseErr
+	}
+	if found {
+		return models, nil
+	}
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if runErr != nil {
+		return nil, fmt.Errorf("%w: Claude CLI control protocol: %v", agentrun.ErrModelDiscoveryUnsupported, runErr)
+	}
+	return nil, fmt.Errorf("%w: Claude CLI returned no initialize control response", agentrun.ErrModelDiscoveryUnsupported)
+}
+
+type discoveryModel struct {
+	Value         string `json:"value"`
+	ResolvedModel string `json:"resolvedModel"`
+	DisplayName   string `json:"displayName"`
+	Description   string `json:"description"`
+}
+
+type discoveryEnvelope struct {
+	Type     string `json:"type"`
+	Response struct {
+		Subtype   string `json:"subtype"`
+		RequestID string `json:"request_id"`
+		Error     string `json:"error"`
+		Response  struct {
+			Models []discoveryModel `json:"models"`
+		} `json:"response"`
+	} `json:"response"`
+}
+
+func parseModelDiscovery(output []byte) ([]agentrun.ModelInfo, bool, error) {
+	for _, line := range bytes.Split(output, []byte{'\n'}) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var envelope discoveryEnvelope
+		if err := json.Unmarshal(line, &envelope); err != nil || envelope.Type != "control_response" || envelope.Response.RequestID != "agentrun-models" {
+			continue
+		}
+		if envelope.Response.Subtype != "success" {
+			return nil, true, fmt.Errorf("%w: %s", agentrun.ErrModelDiscoveryUnsupported, envelope.Response.Error)
+		}
+		models := make([]agentrun.ModelInfo, 0, len(envelope.Response.Response.Models))
+		for _, raw := range envelope.Response.Response.Models {
+			id := errfmt.SanitizeCode(raw.Value)
+			if id == "" {
+				continue
+			}
+			model := agentrun.ModelInfo{
+				ID:          id,
+				Name:        errfmt.SanitizeCode(raw.DisplayName),
+				Description: errfmt.Truncate(raw.Description),
+			}
+			if resolvedID := errfmt.SanitizeCode(raw.ResolvedModel); resolvedID != "" && resolvedID != id {
+				model.Aliases = []string{resolvedID}
+			}
+			models = append(models, model)
+		}
+		return models, true, nil
+	}
+	return nil, false, nil
 }
 
 // SpawnArgs builds exec.Cmd arguments for a new Claude session.
