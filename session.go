@@ -155,7 +155,8 @@ type Session struct {
 	// "claude-sonnet-4-5-20250514"). Backends that advertise a finite catalog
 	// reject unknown identifiers with *ModelNotSupportedError. Backends that
 	// cannot enumerate models may still pass the value to their native model
-	// selector. The effective selection is reported in InitMeta.Model.
+	// selector. The selection is reported in InitMeta.Model; see that field
+	// for when each engine has confirmed it.
 	Model string `json:"model,omitempty"`
 
 	// Prompt is the initial prompt or message for the session.

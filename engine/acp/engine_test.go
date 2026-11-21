@@ -503,6 +503,15 @@ func TestEngine_SetConfigOption_NonFatal(t *testing.T) {
 	if msg.Type != agentrun.MessageInit {
 		t.Fatalf("first message type = %q, want %q", msg.Type, agentrun.MessageInit)
 	}
+	// MessageInit is emitted before the selection is applied, so the session ID
+	// survives the failure and Init.Model holds the requested model. The
+	// MessageError below is how a consumer learns the agent rejected it.
+	if msg.ResumeID == "" {
+		t.Error("MessageInit.ResumeID is empty, want the session ID despite config fail")
+	}
+	if msg.Init == nil || msg.Init.Model != testBigModel {
+		t.Errorf("MessageInit.Init = %+v, want Model %q (the requested model)", msg.Init, testBigModel)
+	}
 
 	// The MessageError about config option failure may be next.
 	msg2 := <-proc.Output()

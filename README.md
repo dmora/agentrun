@@ -152,7 +152,7 @@ type Message struct {
     StopReason StopReason       // why the turn ended (result only)
     ErrorCode  string           // machine-readable error code (error only)
     ResumeID   string           // session ID for resume (init only)
-    Init       *InitMeta        // effective model, catalog, agent identity (init only)
+    Init       *InitMeta        // model, catalog, agent identity (init only)
     Process    *ProcessMeta     // subprocess PID and binary (init only)
     Raw        json.RawMessage  // original unparsed JSON
     Timestamp  time.Time        // when the message was produced
@@ -174,7 +174,7 @@ for msg := range proc.Output() {
 ```
 
 **Init metadata** — captured at session start:
-- `Init.Model` — effective model after explicit selection
+- `Init.Model` — model for the session (on ACP, the requested model when `Session.Model` is set)
 - `Init.AvailableModels` — finite backend catalog when discovery is supported
 - `Init.AgentName`, `Init.AgentVersion` — agent identity (ACP only)
 - `Process.PID`, `Process.Binary` — subprocess info (CLI/ACP engines)
@@ -230,8 +230,9 @@ Set `Session.Model` (or use `WithModel`) before `Start`. CLI backends pass
 the requested model directly through to native flags (discovery is advisory via
 `ListModels`). In ACP, where the agent advertises its supported model catalog
 authoritatively, an unknown ID returns `*agentrun.ModelNotSupportedError`.
-`MessageInit.Init.Model` reports the effective selection for new and resumed
-sessions.
+`MessageInit.Init.Model` reports the model for new and resumed sessions. ACP
+emits `MessageInit` before it applies the selection: if the agent rejects it, a
+`MessageError` follows `MessageInit` and the agent stays on its previous model.
 
 ## Error Handling
 

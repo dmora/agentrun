@@ -547,9 +547,18 @@ type Usage struct {
 // AvailableModels contains meaningful data. A non-nil InitMeta always has
 // meaningful data.
 type InitMeta struct {
-	// Model is the effective model identifier after Session.Model selection has
-	// been applied. When selection is not requested, it is the backend's active
-	// model at session start.
+	// Model is the model identifier for the session, as known when MessageInit
+	// is emitted.
+	//
+	// Claude CLI reports the model the CLI announces at startup, which is the
+	// resolved identifier of any Session.Model selection (for example "haiku"
+	// is reported as its full model ID).
+	//
+	// ACP reports the requested Session.Model when one is set, otherwise the
+	// model the agent reported at session start. ACP emits MessageInit before
+	// it applies the selection: if the agent rejects it, a MessageError follows
+	// MessageInit and the agent stays on its previous model.
+	//
 	// Empty means the backend did not report a model on init.
 	// Sanitized: control chars rejected, truncated to 128 bytes at parse time.
 	Model string `json:"model,omitempty"`

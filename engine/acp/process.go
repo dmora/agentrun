@@ -596,8 +596,9 @@ func availableACPModels(models *sessionModelState, configOptions []sessionConfig
 	return result
 }
 
-// handshake performs initialize + session/new (or session/load), applies
-// session configuration, and then emits MessageInit with effective metadata.
+// handshake performs initialize + session/new (or session/load), validates the
+// requested model against the advertised catalog, emits MessageInit, and then
+// applies session configuration (mode, model).
 func (p *process) handshake(ctx context.Context, session agentrun.Session) error {
 	// Step 1: Initialize.
 	initParams := initializeParams{
@@ -633,7 +634,12 @@ func (p *process) handshake(ctx context.Context, session agentrun.Session) error
 		return err
 	}
 
-	// Step 3: Emit MessageInit (before config application — consumers need session ID).
+	// Step 3: Emit MessageInit before config application. It carries the session
+	// ID and has to precede the MessageError that a rejected selection produces
+	// (see applySessionConfig). Applying config first would also let the
+	// session/update notifications an agent sends in the meantime reach the
+	// consumer ahead of MessageInit. InitMeta.Model is therefore the requested
+	// model here, not a confirmed one.
 	availableModels := availableACPModels(hr.models, hr.configOptions)
 	initMeta := buildInitMeta(&initResult, hr.models)
 	if session.Model != "" {
