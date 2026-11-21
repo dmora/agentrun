@@ -120,6 +120,39 @@ func TestValidateSessionModelUsesAdvertisedModelConfig(t *testing.T) {
 	}
 }
 
+// Session.Model on an agent that gives no way to select a model is an error,
+// not a silent no-op. Naming the agent's current model needs no selection.
+func TestValidateSessionModelWithoutModelConfigOption(t *testing.T) {
+	legacy := &sessionModelState{
+		CurrentModelID:  "current",
+		AvailableModels: []modelInfo{{ID: "current"}, {ID: "other"}},
+	}
+	modeOnly := []sessionConfigOption{{ID: "mode", Category: "mode"}}
+
+	tests := []struct {
+		name          string
+		model         string
+		models        *sessionModelState
+		configOptions []sessionConfigOption
+		wantErr       error
+	}{
+		{name: "no catalog and no config option", model: "any", wantErr: agentrun.ErrModelSelectionUnsupported},
+		{name: "only a non-model config option", model: "any", configOptions: modeOnly, wantErr: agentrun.ErrModelSelectionUnsupported},
+		{name: "listed model but nothing to select it with", model: "other", models: legacy, wantErr: agentrun.ErrModelSelectionUnsupported},
+		{name: "unlisted model is reported as not supported", model: "missing", models: legacy, wantErr: agentrun.ErrModelNotSupported},
+		{name: "current model needs no selection", model: "current", models: legacy},
+		{name: "no model requested", model: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateSessionModel(tt.model, tt.models, tt.configOptions)
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("error = %v, want %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 // The ACP schema allows a select option's "options" to be a list of groups
 // (SessionConfigSelectGroup) instead of a flat list of values. Every member of
 // every group is a valid selection.

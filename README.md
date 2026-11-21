@@ -229,7 +229,12 @@ if lister, ok := any(engine).(agentrun.ModelLister); ok {
 Set `Session.Model` (or use `WithModel`) before `Start`. CLI backends pass
 the requested model directly through to native flags (discovery is advisory via
 `ListModels`). In ACP, where the agent advertises its supported model catalog
-authoritatively, an unknown ID returns `*agentrun.ModelNotSupportedError`.
+authoritatively, an unknown ID returns `*agentrun.ModelNotSupportedError`. If
+the agent offers no way to select a model, `Start` returns
+`ErrModelSelectionUnsupported` instead of ignoring `Session.Model`. Both errors
+come back after the agent has created the session, so check the model with
+`agentrun.ModelAvailable` against a catalog you already have if a leftover
+session matters to you.
 `MessageInit.Init.Model` reports the model for new and resumed sessions. ACP
 emits `MessageInit` before it applies the selection: if the agent rejects it, a
 `MessageError` follows `MessageInit` and the agent stays on its previous model.
