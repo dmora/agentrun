@@ -554,12 +554,27 @@ func appendSessionStateModels(result *[]agentrun.ModelInfo, seen map[string]bool
 	}
 }
 
+// selectableChoices returns the values a select option offers, with groups
+// flattened into their members. Without this a grouped option would yield an
+// empty catalog, and validateSessionModel would reject every model in it.
+func selectableChoices(choices []configOptionChoice) []configOptionChoice {
+	flat := make([]configOptionChoice, 0, len(choices))
+	for _, choice := range choices {
+		if len(choice.Options) > 0 {
+			flat = append(flat, choice.Options...)
+			continue
+		}
+		flat = append(flat, choice)
+	}
+	return flat
+}
+
 func appendConfigOptionModels(result *[]agentrun.ModelInfo, seen map[string]bool, configOptions []sessionConfigOption) {
 	for _, opt := range configOptions {
 		if opt.Category != modelCategory {
 			continue
 		}
-		for _, choice := range opt.Options {
+		for _, choice := range selectableChoices(opt.Options) {
 			if id := errfmt.SanitizeCode(choice.Value); id != "" {
 				appendModel(result, seen, agentrun.ModelInfo{
 					ID:   id,
