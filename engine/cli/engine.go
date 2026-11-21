@@ -23,6 +23,7 @@ type Engine struct {
 
 // Compile-time interface satisfaction check.
 var _ agentrun.Engine = (*Engine)(nil)
+var _ agentrun.ModelLister = (*Engine)(nil)
 
 // NewEngine creates a CLI engine backed by the given Backend.
 // Use EngineOption functions to customize buffer sizes and grace period.
@@ -49,12 +50,43 @@ func (e *Engine) Validate() (retErr error) {
 	return nil
 }
 
+// ListModels delegates to an optional backend discovery capability.
+func (e *Engine) ListModels(ctx context.Context, session agentrun.Session) ([]agentrun.ModelInfo, error) {
+	lister, ok := e.backend.(agentrun.ModelLister)
+	if !ok {
+		return nil, agentrun.ErrModelDiscoveryUnsupported
+	}
+	models, err := lister.ListModels(ctx, session.Clone())
+	if err != nil {
+		return nil, err
+	}
+	return models, nil
+}
+
+func validateCWD(cwd string) error {
+	if !filepath.IsAbs(cwd) {
+		return fmt.Errorf("cli: CWD must be an absolute path, got %q", cwd)
+	}
+	info, err := os.Stat(cwd)
+	if err != nil {
+		return fmt.Errorf("cli: CWD: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("cli: CWD is not a directory: %s", cwd)
+	}
+	return nil
+}
+
 // Start initializes a subprocess session and returns a Process handle.
 // Returns [agentrun.ErrSendNotSupported] if the backend lacks a send path
 // (neither Streamer+InputFormatter nor Resumer).
-// The context parameter is reserved for future use (e.g., start timeout);
-// subprocess lifetime is controlled via [agentrun.Process.Stop].
-func (e *Engine) Start(_ context.Context, session agentrun.Session, opts ...agentrun.Option) (agentrun.Process, error) {
+// If ctx is cancelled before start, Start returns ctx.Err().
+// Subprocess lifetime is controlled via [agentrun.Process.Stop].
+func (e *Engine) Start(ctx context.Context, session agentrun.Session, opts ...agentrun.Option) (agentrun.Process, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	startOpts := agentrun.ResolveOptions(opts...)
 
 	// Deep-copy session to prevent aliasing.
@@ -69,15 +101,8 @@ func (e *Engine) Start(_ context.Context, session agentrun.Session, opts ...agen
 	}
 
 	// Validate CWD.
-	if !filepath.IsAbs(session.CWD) {
-		return nil, fmt.Errorf("cli: CWD must be an absolute path, got %q", session.CWD)
-	}
-	info, err := os.Stat(session.CWD)
-	if err != nil {
-		return nil, fmt.Errorf("cli: CWD: %w", err)
-	}
-	if !info.IsDir() {
-		return nil, fmt.Errorf("cli: CWD is not a directory: %s", session.CWD)
+	if err := validateCWD(session.CWD); err != nil {
+		return nil, err
 	}
 
 	// Validate cross-cutting options early (before SpawnArgs/StreamArgs).

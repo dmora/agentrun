@@ -152,7 +152,7 @@ type Message struct {
     StopReason StopReason       // why the turn ended (result only)
     ErrorCode  string           // machine-readable error code (error only)
     ResumeID   string           // session ID for resume (init only)
-    Init       *InitMeta        // model, agent name/version (init only)
+    Init       *InitMeta        // model, catalog, agent identity (init only)
     Process    *ProcessMeta     // subprocess PID and binary (init only)
     Raw        json.RawMessage  // original unparsed JSON
     Timestamp  time.Time        // when the message was produced
@@ -174,7 +174,8 @@ for msg := range proc.Output() {
 ```
 
 **Init metadata** — captured at session start:
-- `Init.Model` — model identifier (all backends)
+- `Init.Model` — model for the session (on ACP, the requested model when `Session.Model` is set)
+- `Init.AvailableModels` — finite backend catalog when discovery is supported
 - `Init.AgentName`, `Init.AgentVersion` — agent identity (ACP only)
 - `Process.PID`, `Process.Binary` — subprocess info (CLI/ACP engines)
 - `ResumeID` — persist and pass back via `OptionResumeID` to resume later
@@ -207,6 +208,32 @@ session := agentrun.Session{
 
 Backend-specific options use a namespace prefix (e.g., `claude.OptionPermissionMode`, `codex.OptionSandbox`). See each backend package for available options.
 
+### Model discovery and selection
+
+Engines that can enumerate models implement the optional `ModelLister`
+capability. Claude uses its authenticated stream-json control protocol; ACP
+uses the catalog returned by `session/new` or `session/load`.
+
+```go
+if lister, ok := any(engine).(agentrun.ModelLister); ok {
+    models, err := lister.ListModels(ctx, session)
+    if errors.Is(err, agentrun.ErrModelDiscoveryUnsupported) {
+        // This backend/version can still accept Session.Model explicitly.
+    }
+    for _, model := range models {
+        fmt.Println(model.ID, model.Name)
+    }
+}
+```
+
+Set `Session.Model` (or use `WithModel`) before `Start`. CLI backends pass
+the requested model directly through to native flags (discovery is advisory via
+`ListModels`). In ACP, where the agent advertises its supported model catalog
+authoritatively, an unknown ID returns `*agentrun.ModelNotSupportedError`.
+`MessageInit.Init.Model` reports the model for new and resumed sessions. ACP
+emits `MessageInit` before it applies the selection: if the agent rejects it, a
+`MessageError` follows `MessageInit` and the agent stays on its previous model.
+
 ## Error Handling
 
 Sentinel errors for engine operations:
@@ -217,6 +244,9 @@ Sentinel errors for engine operations:
 | `ErrTerminated` | Session was terminated (`Stop()` called, connection closed) |
 | `ErrSendNotSupported` | Backend lacks Send capability |
 | `ErrNoResult`        | Process exited without producing a result (CLI engines only) |
+| `ErrModelDiscoveryUnsupported` | Backend/version cannot enumerate models |
+| `ErrModelSelectionUnsupported` | Backend cannot apply explicit model selection |
+| `ErrModelNotSupported` | Requested ID is outside the advertised finite catalog |
 
 Subprocess exit codes are wrapped in `*ExitError`. Use `ExitCode()` to extract:
 
@@ -256,7 +286,7 @@ The root `agentrun` package defines four core types:
 - **Session** — minimal session state passed to engines (value type)
 - **Message** — structured output from agent processes
 
-Engine implementations live in subpackages. CLI backends share a generic `cli.Engine` that delegates to backend-specific interfaces. Optional capabilities (resume, streaming) are discovered via type assertion.
+Engine implementations live in subpackages. CLI backends share a generic `cli.Engine` that delegates to backend-specific interfaces. Optional capabilities (resume, streaming, model discovery) are discovered via type assertion.
 
 ### Built-in Backends
 

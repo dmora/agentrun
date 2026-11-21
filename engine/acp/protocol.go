@@ -130,8 +130,9 @@ type sessionModelState struct {
 
 // modelInfo describes a model available to the agent.
 type modelInfo struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID          string `json:"modelId"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
 }
 
 // sessionConfigOption describes a configurable session option.
@@ -144,10 +145,14 @@ type sessionConfigOption struct {
 	Options      []configOptionChoice `json:"options,omitempty"`
 }
 
-// configOptionChoice is one selectable value for a config option.
+// configOptionChoice is one entry of a select option's "options" array. The
+// ACP schema lets that array hold either selectable values (value + name) or
+// groups (SessionConfigSelectGroup). A group has no value of its own and
+// nests its selectable values under "options".
 type configOptionChoice struct {
-	Value string `json:"value"`
-	Name  string `json:"name"`
+	Value   string               `json:"value"`
+	Name    string               `json:"name"`
+	Options []configOptionChoice `json:"options,omitempty"`
 }
 
 // --- Prompt ---

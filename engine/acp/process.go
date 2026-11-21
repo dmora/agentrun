@@ -525,8 +525,80 @@ func buildInitMeta(initResult *initializeResult, models *sessionModelState) *age
 	return &meta
 }
 
-// handshake performs initialize + session/new (or session/load) and emits MessageInit.
-// After emitting MessageInit, applies session configuration (mode, model).
+const modelCategory = "model"
+
+func appendModel(result *[]agentrun.ModelInfo, seen map[string]bool, m agentrun.ModelInfo) {
+	if m.ID == "" || seen[m.ID] {
+		return
+	}
+	seen[m.ID] = true
+	*result = append(*result, m)
+}
+
+func appendSessionStateModels(result *[]agentrun.ModelInfo, seen map[string]bool, models *sessionModelState) {
+	if models == nil {
+		return
+	}
+	for _, m := range models.AvailableModels {
+		id := errfmt.SanitizeCode(m.ID)
+		if id != "" {
+			appendModel(result, seen, agentrun.ModelInfo{
+				ID:          id,
+				Name:        errfmt.SanitizeCode(m.Name),
+				Description: errfmt.Truncate(m.Description),
+			})
+		}
+	}
+	if models.CurrentModelID != "" {
+		appendModel(result, seen, agentrun.ModelInfo{ID: errfmt.SanitizeCode(models.CurrentModelID)})
+	}
+}
+
+// selectableChoices returns the values a select option offers, with groups
+// flattened into their members. Without this a grouped option would yield an
+// empty catalog, and validateSessionModel would reject every model in it.
+func selectableChoices(choices []configOptionChoice) []configOptionChoice {
+	flat := make([]configOptionChoice, 0, len(choices))
+	for _, choice := range choices {
+		if len(choice.Options) > 0 {
+			flat = append(flat, choice.Options...)
+			continue
+		}
+		flat = append(flat, choice)
+	}
+	return flat
+}
+
+func appendConfigOptionModels(result *[]agentrun.ModelInfo, seen map[string]bool, configOptions []sessionConfigOption) {
+	for _, opt := range configOptions {
+		if opt.Category != modelCategory {
+			continue
+		}
+		for _, choice := range selectableChoices(opt.Options) {
+			if id := errfmt.SanitizeCode(choice.Value); id != "" {
+				appendModel(result, seen, agentrun.ModelInfo{
+					ID:   id,
+					Name: errfmt.SanitizeCode(choice.Name),
+				})
+			}
+		}
+		if opt.CurrentValue != "" {
+			appendModel(result, seen, agentrun.ModelInfo{ID: errfmt.SanitizeCode(opt.CurrentValue)})
+		}
+	}
+}
+
+func availableACPModels(models *sessionModelState, configOptions []sessionConfigOption) []agentrun.ModelInfo {
+	var result []agentrun.ModelInfo
+	seen := make(map[string]bool)
+	appendSessionStateModels(&result, seen, models)
+	appendConfigOptionModels(&result, seen, configOptions)
+	return result
+}
+
+// handshake performs initialize + session/new (or session/load), validates the
+// requested model against the advertised catalog, emits MessageInit, and then
+// applies session configuration (mode, model).
 func (p *process) handshake(ctx context.Context, session agentrun.Session) error {
 	// Step 1: Initialize.
 	initParams := initializeParams{
@@ -557,11 +629,36 @@ func (p *process) handshake(ctx context.Context, session agentrun.Session) error
 	}
 	p.sessionID = hr.sessionID
 
-	// Step 3: Emit MessageInit (before config application — consumers need session ID).
+	// Step 2b: Validate requested model against agent-advertised models.
+	if err := validateSessionModel(session.Model, hr.models, hr.configOptions); err != nil {
+		return err
+	}
+
+	// Step 3: Emit MessageInit before config application. It carries the session
+	// ID and has to precede the MessageError that a rejected selection produces
+	// (see applySessionConfig). Applying config first would also let the
+	// session/update notifications an agent sends in the meantime reach the
+	// consumer ahead of MessageInit. InitMeta.Model is therefore the requested
+	// model here, not a confirmed one.
+	availableModels := availableACPModels(hr.models, hr.configOptions)
+	initMeta := buildInitMeta(&initResult, hr.models)
+	if session.Model != "" {
+		if initMeta == nil {
+			initMeta = &agentrun.InitMeta{}
+		}
+		initMeta.Model = errfmt.SanitizeCode(session.Model)
+	}
+	if len(availableModels) > 0 {
+		if initMeta == nil {
+			initMeta = &agentrun.InitMeta{}
+		}
+		initMeta.AvailableModels = availableModels
+	}
+
 	p.emit(agentrun.Message{
 		Type:      agentrun.MessageInit,
 		ResumeID:  p.sessionID,
-		Init:      buildInitMeta(&initResult, hr.models),
+		Init:      initMeta,
 		Process:   p.processMetaSnapshot(),
 		Timestamp: time.Now(),
 	})
@@ -648,7 +745,7 @@ func sessionConfigCalls(sessionID string, session agentrun.Session, modes *sessi
 	if session.Model != "" {
 		// Find a config option with category "model".
 		for _, opt := range configOptions {
-			if opt.Category == "model" {
+			if opt.Category == modelCategory {
 				calls = append(calls, configCall{
 					Method: MethodSessionSetConfig,
 					Params: setConfigOptionParams{SessionID: sessionID, ConfigID: opt.ID, Value: session.Model},
@@ -659,6 +756,27 @@ func sessionConfigCalls(sessionID string, session agentrun.Session, modes *sessi
 	}
 
 	return calls
+}
+
+func validateSessionModel(model string, models *sessionModelState, configOptions []sessionConfigOption) error {
+	if model == "" {
+		return nil
+	}
+	available := availableACPModels(models, configOptions)
+	if len(available) > 0 {
+		if err := agentrun.ValidateModelSelection(available, model); err != nil {
+			return err
+		}
+	}
+	if models != nil && models.CurrentModelID == model {
+		return nil
+	}
+	for _, opt := range configOptions {
+		if opt.Category == modelCategory {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: ACP agent did not advertise a model config option", agentrun.ErrModelSelectionUnsupported)
 }
 
 // applySessionConfig applies mode and model settings after session creation.

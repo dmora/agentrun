@@ -478,6 +478,8 @@ func TestEngine_SetMode_Fatal(t *testing.T) {
 	}
 }
 
+const testBigModel = "big-model"
+
 func TestEngine_SetConfigOption_NonFatal(t *testing.T) {
 	wrapper := writeScript(t, "set-config-fail")
 	engine := acp.NewEngine(acp.WithBinary(wrapper))
@@ -487,7 +489,7 @@ func TestEngine_SetConfigOption_NonFatal(t *testing.T) {
 
 	session := agentrun.Session{
 		CWD:   t.TempDir(),
-		Model: "some-model",
+		Model: testBigModel,
 	}
 
 	proc, err := engine.Start(ctx, session)
@@ -501,6 +503,15 @@ func TestEngine_SetConfigOption_NonFatal(t *testing.T) {
 	if msg.Type != agentrun.MessageInit {
 		t.Fatalf("first message type = %q, want %q", msg.Type, agentrun.MessageInit)
 	}
+	// MessageInit is emitted before the selection is applied, so the session ID
+	// survives the failure and Init.Model holds the requested model. The
+	// MessageError below is how a consumer learns the agent rejected it.
+	if msg.ResumeID == "" {
+		t.Error("MessageInit.ResumeID is empty, want the session ID despite config fail")
+	}
+	if msg.Init == nil || msg.Init.Model != testBigModel {
+		t.Errorf("MessageInit.Init = %+v, want Model %q (the requested model)", msg.Init, testBigModel)
+	}
 
 	// The MessageError about config option failure may be next.
 	msg2 := <-proc.Output()
@@ -509,6 +520,84 @@ func TestEngine_SetConfigOption_NonFatal(t *testing.T) {
 	}
 	if !strings.Contains(msg2.Content, "set_config_option") {
 		t.Errorf("error content = %q, want to contain 'set_config_option'", msg2.Content)
+	}
+}
+
+func TestEngine_ModelCatalogAndSelection(t *testing.T) {
+	wrapper := writeScript(t, "")
+	engine := acp.NewEngine(acp.WithBinary(wrapper))
+	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	defer cancel()
+
+	proc, err := engine.Start(ctx, agentrun.Session{CWD: t.TempDir(), Model: testBigModel})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = proc.Stop(context.Background()) })
+
+	msg := <-proc.Output()
+	if msg.Type != agentrun.MessageInit || msg.Init == nil {
+		t.Fatalf("init = %+v", msg)
+	}
+	if msg.Init.Model != testBigModel {
+		t.Errorf("effective model = %q, want big-model", msg.Init.Model)
+	}
+	if !agentrun.ModelAvailable(msg.Init.AvailableModels, testBigModel) {
+		t.Errorf("catalog = %+v, want big-model", msg.Init.AvailableModels)
+	}
+}
+
+func TestEngine_UnsupportedModelTypedError(t *testing.T) {
+	wrapper := writeScript(t, "")
+	engine := acp.NewEngine(acp.WithBinary(wrapper))
+	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	defer cancel()
+
+	_, err := engine.Start(ctx, agentrun.Session{CWD: t.TempDir(), Model: "missing-model"})
+	if !errors.Is(err, agentrun.ErrModelNotSupported) {
+		t.Fatalf("error = %v, want ErrModelNotSupported", err)
+	}
+	var modelErr *agentrun.ModelNotSupportedError
+	if !errors.As(err, &modelErr) || modelErr.Model != "missing-model" {
+		t.Fatalf("typed error = %#v", modelErr)
+	}
+}
+
+func TestEngine_ListModels(t *testing.T) {
+	wrapper := writeScript(t, "")
+	engine := acp.NewEngine(acp.WithBinary(wrapper))
+	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	defer cancel()
+
+	models, err := engine.ListModels(ctx, agentrun.Session{CWD: t.TempDir()})
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	if !agentrun.ModelAvailable(models, "default-model") || !agentrun.ModelAvailable(models, testBigModel) {
+		t.Fatalf("models = %+v", models)
+	}
+}
+
+func TestEngine_ResumeModelSelection(t *testing.T) {
+	wrapper := writeScript(t, "")
+	engine := acp.NewEngine(acp.WithBinary(wrapper))
+	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	defer cancel()
+
+	proc, err := engine.Start(ctx, agentrun.Session{
+		CWD:   t.TempDir(),
+		Model: testBigModel,
+		Options: map[string]string{
+			agentrun.OptionResumeID: "mock-session-001",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start resume: %v", err)
+	}
+	t.Cleanup(func() { _ = proc.Stop(context.Background()) })
+	msg := <-proc.Output()
+	if msg.Init == nil || msg.Init.Model != testBigModel {
+		t.Fatalf("resume init = %+v", msg.Init)
 	}
 }
 

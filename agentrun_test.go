@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -600,9 +601,17 @@ func TestStopReasonConstants(t *testing.T) {
 
 // --- InitMeta JSON tests ---
 
+const testInitMetaModel = "claude-sonnet-4-5-20250514"
+
 func TestInitMeta_JSON_RoundTrip(t *testing.T) {
 	meta := InitMeta{
-		Model:        "claude-sonnet-4-5-20250514",
+		Model: testInitMetaModel,
+		AvailableModels: []ModelInfo{{
+			ID:          testInitMetaModel,
+			Name:        "Sonnet",
+			Description: "Balanced",
+			Aliases:     []string{"sonnet"},
+		}},
 		AgentName:    "opencode",
 		AgentVersion: "1.2.3",
 	}
@@ -614,7 +623,7 @@ func TestInitMeta_JSON_RoundTrip(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if got != meta {
+	if !reflect.DeepEqual(got, meta) {
 		t.Errorf("round-trip mismatch: got %+v, want %+v", got, meta)
 	}
 }
@@ -643,7 +652,7 @@ func TestMessageJSON_WithInit(t *testing.T) {
 	msg := Message{
 		Type:     MessageInit,
 		ResumeID: "ses_abc",
-		Init:     &InitMeta{Model: "claude-sonnet-4-5-20250514"},
+		Init:     &InitMeta{Model: testInitMetaModel},
 	}
 	data, err := json.Marshal(msg)
 	if err != nil {
@@ -656,8 +665,8 @@ func TestMessageJSON_WithInit(t *testing.T) {
 	if got.Init == nil {
 		t.Fatal("Init should be populated")
 	}
-	if got.Init.Model != "claude-sonnet-4-5-20250514" {
-		t.Errorf("Init.Model = %q, want %q", got.Init.Model, "claude-sonnet-4-5-20250514")
+	if got.Init.Model != testInitMetaModel {
+		t.Errorf("Init.Model = %q, want %q", got.Init.Model, testInitMetaModel)
 	}
 }
 
@@ -673,6 +682,24 @@ func TestMessageJSON_NilInit(t *testing.T) {
 	}
 	if _, ok := raw["init"]; ok {
 		t.Error("init field should be omitted when nil")
+	}
+}
+
+func TestModelCatalogSelection(t *testing.T) {
+	models := []ModelInfo{{ID: "claude-sonnet-5", Aliases: []string{"sonnet"}}}
+	if !ModelAvailable(models, "claude-sonnet-5") || !ModelAvailable(models, "sonnet") {
+		t.Fatal("canonical ID and alias should both be available")
+	}
+	if err := ValidateModelSelection(models, "sonnet"); err != nil {
+		t.Fatalf("alias validation: %v", err)
+	}
+	err := ValidateModelSelection(models, "opus")
+	if !errors.Is(err, ErrModelNotSupported) {
+		t.Fatalf("error = %v, want ErrModelNotSupported", err)
+	}
+	var typed *ModelNotSupportedError
+	if !errors.As(err, &typed) || typed.Model != "opus" || len(typed.Available) != 1 {
+		t.Fatalf("typed error = %#v", typed)
 	}
 }
 

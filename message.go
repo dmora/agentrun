@@ -543,15 +543,32 @@ type Usage struct {
 // individual fields rather than assuming non-nil InitMeta means all
 // fields are present.
 //
-// Nil-guard contract: backends only set Init when at least one field is
-// non-empty. A non-nil InitMeta always has meaningful data.
+// Nil-guard contract: backends only set Init when at least one scalar field or
+// AvailableModels contains meaningful data. A non-nil InitMeta always has
+// meaningful data.
 type InitMeta struct {
-	// Model is the model identifier reported by the backend at session start.
-	// Reflects the agent's reported model during handshake; may differ from
-	// the active model if the caller overrides via Session.Model.
+	// Model is the model identifier for the session, as known when MessageInit
+	// is emitted.
+	//
+	// Claude CLI reports the model the CLI announces at startup, which is the
+	// resolved identifier of any Session.Model selection (for example "haiku"
+	// is reported as its full model ID).
+	//
+	// ACP reports the requested Session.Model when one is set, otherwise the
+	// model the agent reported at session start. ACP emits MessageInit before
+	// it applies the selection: if the agent rejects it, a MessageError follows
+	// MessageInit and the agent stays on its previous model.
+	//
 	// Empty means the backend did not report a model on init.
 	// Sanitized: control chars rejected, truncated to 128 bytes at parse time.
 	Model string `json:"model,omitempty"`
+
+	// AvailableModels is the finite model catalog advertised by the backend.
+	// Nil or empty means no catalog was reported; it does not mean that the
+	// backend supports no models. Use ModelLister for explicit discovery and
+	// errors.Is(err, ErrModelDiscoveryUnsupported) to distinguish unsupported
+	// discovery from an available empty catalog.
+	AvailableModels []ModelInfo `json:"available_models,omitempty"`
 
 	// AgentName is the agent implementation's name (e.g., "opencode", "claude-code").
 	// Empty means the backend did not report an agent name.
@@ -564,6 +581,23 @@ type InitMeta struct {
 	// Populated by ACP backends and by Claude CLI (from claude_code_version).
 	// Sanitized: control chars rejected, truncated to 128 bytes at parse time.
 	AgentVersion string `json:"agent_version,omitempty"`
+}
+
+// ModelInfo describes a model selectable through Session.Model.
+type ModelInfo struct {
+	// ID is the primary selectable model identifier.
+	ID string `json:"id"`
+
+	// Name is a human-readable display name. It may be empty when the backend
+	// only reports identifiers.
+	Name string `json:"name,omitempty"`
+
+	// Description summarizes the model or its capabilities when supplied by
+	// the backend.
+	Description string `json:"description,omitempty"`
+
+	// Aliases are additional identifiers accepted by Session.Model.
+	Aliases []string `json:"aliases,omitempty"`
 }
 
 // ProcessMeta describes the OS subprocess backing a session.

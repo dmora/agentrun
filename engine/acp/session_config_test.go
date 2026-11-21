@@ -1,6 +1,10 @@
 package acp
 
 import (
+	"encoding/json"
+	"errors"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/dmora/agentrun"
@@ -86,6 +90,70 @@ func TestSessionConfigCalls_ModelSetting(t *testing.T) {
 	}
 	if p.Value != "gpt-4" {
 		t.Errorf("value = %q, want %q", p.Value, "gpt-4")
+	}
+}
+
+func TestValidateSessionModelUsesAdvertisedModelConfig(t *testing.T) {
+	const (
+		baseModel       = "base-model"
+		advertisedModel = "base-model[medium]"
+	)
+	models := &sessionModelState{
+		CurrentModelID: advertisedModel,
+		AvailableModels: []modelInfo{
+			{ID: "base-model[low]"},
+			{ID: advertisedModel},
+		},
+	}
+	configOptions := []sessionConfigOption{{
+		ID: "model", Category: "model",
+		Options: []configOptionChoice{{Value: baseModel, Name: "Base Model"}},
+	}}
+	if err := validateSessionModel(baseModel, models, configOptions); err != nil {
+		t.Fatalf("validate base model: %v", err)
+	}
+	if err := validateSessionModel(advertisedModel, models, configOptions); err != nil {
+		t.Fatalf("validate advertised model: %v", err)
+	}
+	if err := validateSessionModel("missing-model", models, configOptions); err == nil || !strings.Contains(err.Error(), "not supported") {
+		t.Fatalf("validate missing model error = %v", err)
+	}
+}
+
+// The ACP schema allows a select option's "options" to be a list of groups
+// (SessionConfigSelectGroup) instead of a flat list of values. Every member of
+// every group is a valid selection.
+func TestValidateSessionModelAcceptsGroupedModelOptions(t *testing.T) {
+	const wire = `[{
+		"id": "model", "name": "Model", "category": "model", "type": "select",
+		"currentValue": "a",
+		"options": [
+			{"group": "g1", "name": "Group 1", "options": [
+				{"value": "a", "name": "A"},
+				{"value": "b", "name": "B"}
+			]},
+			{"group": "g2", "name": "Group 2", "options": [
+				{"value": "c", "name": "C"}
+			]}
+		]
+	}]`
+	var configOptions []sessionConfigOption
+	if err := json.Unmarshal([]byte(wire), &configOptions); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	got := availableACPModels(nil, configOptions)
+	want := []agentrun.ModelInfo{{ID: "a", Name: "A"}, {ID: "b", Name: "B"}, {ID: "c", Name: "C"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("catalog = %+v, want %+v", got, want)
+	}
+	for _, id := range []string{"a", "b", "c"} {
+		if err := validateSessionModel(id, nil, configOptions); err != nil {
+			t.Errorf("validate %q: %v", id, err)
+		}
+	}
+	if err := validateSessionModel("missing-model", nil, configOptions); !errors.Is(err, agentrun.ErrModelNotSupported) {
+		t.Errorf("validate missing model error = %v, want ErrModelNotSupported", err)
 	}
 }
 

@@ -46,6 +46,28 @@ func TestNew_WithBinaryEmpty(t *testing.T) {
 	}
 }
 
+func TestParseModelDiscovery(t *testing.T) {
+	line := `{"type":"control_response","response":{"subtype":"success","request_id":"agentrun-models","response":{"models":[{"value":"sonnet","resolvedModel":"claude-sonnet-5","displayName":"Sonnet","description":"Efficient"},{"value":"haiku","displayName":"Haiku","description":"Fast"}]}}}`
+	models, found, err := parseModelDiscovery([]byte("{\"type\":\"system\"}\n" + line + "\n"))
+	if err != nil || !found {
+		t.Fatalf("parseModelDiscovery: found=%v err=%v", found, err)
+	}
+	if len(models) != 2 || models[0].ID != "sonnet" || models[0].Name != "Sonnet" {
+		t.Fatalf("models = %+v", models)
+	}
+	if !agentrun.ModelAvailable(models, "claude-sonnet-5") {
+		t.Fatalf("resolved model alias missing: %+v", models)
+	}
+}
+
+func TestParseModelDiscovery_Unsupported(t *testing.T) {
+	line := `{"type":"control_response","response":{"subtype":"error","request_id":"agentrun-models","error":"Unsupported control request subtype"}}`
+	_, found, err := parseModelDiscovery([]byte(line))
+	if !found || !errors.Is(err, agentrun.ErrModelDiscoveryUnsupported) {
+		t.Fatalf("found=%v err=%v", found, err)
+	}
+}
+
 func TestNew_WithPartialMessagesFalse(t *testing.T) {
 	b := New(WithPartialMessages(false))
 	if b.partialMessages {

@@ -11,6 +11,14 @@
 //
 //	b := claude.New()
 //	engine := cli.NewEngine(b)
+//	models, err := engine.ListModels(ctx, session)
+//
+// Model discovery uses Claude Code's supported stream-json initialize control
+// request. It reflects the current authentication, provider configuration, and
+// policy restrictions without parsing --help or the interactive /model picker.
+// Installed CLI versions without this control protocol return
+// [agentrun.ErrModelDiscoveryUnsupported]; Session.Model selection still maps
+// to --model.
 //
 // # Mode Selection
 //

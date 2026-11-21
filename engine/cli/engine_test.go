@@ -107,6 +107,16 @@ type testStreamerOnlyBackend struct {
 	streamFn func(agentrun.Session) (string, []string)
 }
 
+type modelListingBackend struct {
+	*testResumerBackend
+	models []agentrun.ModelInfo
+	err    error
+}
+
+func (b *modelListingBackend) ListModels(context.Context, agentrun.Session) ([]agentrun.ModelInfo, error) {
+	return b.models, b.err
+}
+
 func (b *testStreamerOnlyBackend) StreamArgs(s agentrun.Session) (string, []string) {
 	return b.streamFn(s)
 }
@@ -170,6 +180,42 @@ func withResumer(tb testBackend) *testResumerBackend {
 // ---------------------------------------------------------------------------
 
 var _ agentrun.Engine = (*cli.Engine)(nil)
+var _ agentrun.ModelLister = (*cli.Engine)(nil)
+
+func TestEngine_ListModels(t *testing.T) {
+	backend := &modelListingBackend{
+		testResumerBackend: echoResumerBackend(),
+		models:             []agentrun.ModelInfo{{ID: "model-a", Name: "Model A", Aliases: []string{"a"}}},
+	}
+	engine := cli.NewEngine(backend)
+
+	models, err := engine.ListModels(testCtx(t), agentrun.Session{CWD: tempDir(t)})
+	if err != nil || !agentrun.ModelAvailable(models, "a") {
+		t.Fatalf("ListModels = %+v, %v", models, err)
+	}
+}
+
+func TestEngine_ListModels_Unsupported(t *testing.T) {
+	engine := cli.NewEngine(echoResumerBackend())
+	_, err := engine.ListModels(testCtx(t), agentrun.Session{CWD: tempDir(t)})
+	if !errors.Is(err, agentrun.ErrModelDiscoveryUnsupported) {
+		t.Fatalf("error = %v, want ErrModelDiscoveryUnsupported", err)
+	}
+}
+
+func TestEngine_Start_AdvisoryModelSelection(t *testing.T) {
+	backend := &modelListingBackend{
+		testResumerBackend: echoResumerBackend(),
+		models:             []agentrun.ModelInfo{{ID: "model-a"}},
+	}
+	engine := cli.NewEngine(backend)
+	// CLI model catalog is advisory; Start does not call ListModels or reject unlisted models.
+	proc, err := engine.Start(testCtx(t), agentrun.Session{CWD: tempDir(t), Model: "custom-unlisted-model"})
+	if err != nil {
+		t.Fatalf("Start should succeed for unlisted model: %v", err)
+	}
+	_ = proc.Stop(testCtx(t))
+}
 
 // ---------------------------------------------------------------------------
 // Validate tests
