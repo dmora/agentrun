@@ -152,11 +152,19 @@ type Session struct {
 	CWD string `json:"cwd"`
 
 	// Model explicitly selects the AI model before the first turn (e.g.,
-	// "claude-sonnet-4-5-20250514"). Backends that advertise a finite catalog
-	// reject unknown identifiers with *ModelNotSupportedError. Backends that
-	// cannot enumerate models may still pass the value to their native model
-	// selector. The selection is reported in InitMeta.Model; see that field
-	// for when each engine has confirmed it.
+	// "claude-sonnet-4-5-20250514").
+	//
+	// CLI backends pass the value to the CLI's own model flag without checking
+	// it against a catalog; what ModelLister returns for them is advisory.
+	//
+	// The ACP engine checks the value against the catalog the agent
+	// advertises. Start fails with *ModelNotSupportedError for an identifier
+	// outside that catalog, and with ErrModelSelectionUnsupported when the
+	// agent offers no way to select a model. See ModelNotSupportedError for
+	// what a rejected Start leaves behind and how to check beforehand.
+	//
+	// The selection is reported in InitMeta.Model; see that field for when
+	// each engine has confirmed it.
 	Model string `json:"model,omitempty"`
 
 	// Prompt is the initial prompt or message for the session.

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -682,6 +683,40 @@ func TestMessageJSON_NilInit(t *testing.T) {
 	}
 	if _, ok := raw["init"]; ok {
 		t.Error("init field should be omitted when nil")
+	}
+}
+
+func TestModelNotSupportedError_ListsAtMostTenModels(t *testing.T) {
+	catalog := func(n int) []ModelInfo {
+		models := make([]ModelInfo, n)
+		for i := range models {
+			models[i] = ModelInfo{ID: fmt.Sprintf("model-%03d", i)}
+		}
+		return models
+	}
+
+	// At the cap: every ID is named and nothing is summarized.
+	atCap := (&ModelNotSupportedError{Model: "x", Available: catalog(10)}).Error()
+	if !strings.Contains(atCap, "model-009") || strings.Contains(atCap, "more") {
+		t.Errorf("10-model message = %q, want all 10 IDs and no summary", atCap)
+	}
+
+	// Over the cap: the first 10 are named, the rest are counted, and the
+	// full catalog stays on Available.
+	err := ValidateModelSelection(catalog(231), "x")
+	var typed *ModelNotSupportedError
+	if !errors.As(err, &typed) {
+		t.Fatalf("error = %v, want *ModelNotSupportedError", err)
+	}
+	msg := typed.Error()
+	if !strings.Contains(msg, "model-009, and 221 more)") {
+		t.Errorf("231-model message = %q, want it to end the list with %q", msg, "model-009, and 221 more)")
+	}
+	if strings.Contains(msg, "model-010") {
+		t.Errorf("231-model message names an 11th ID: %q", msg)
+	}
+	if len(typed.Available) != 231 {
+		t.Errorf("Available has %d models, want the full 231", len(typed.Available))
 	}
 }
 
