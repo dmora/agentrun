@@ -62,11 +62,16 @@ const maxListedModels = 10
 // The ACP engine returns this error from Start after the agent has created
 // the session, because the catalog arrives in that response. On an agent that
 // persists sessions, the rejected Start leaves that session behind and Start
-// returns no handle to it. To avoid that, check the model with ModelAvailable
-// against a catalog obtained earlier (ModelLister.ListModels, or
-// InitMeta.AvailableModels from a previous session) before calling Start.
-// ErrModelSelectionUnsupported is returned at the same point and has the same
-// effect.
+// returns no handle to it. ErrModelSelectionUnsupported is returned at the
+// same point and has the same effect.
+//
+// To avoid the leftover session, check the model with ModelAvailable before
+// calling Start, against a catalog the caller already holds: for example
+// InitMeta.AvailableModels from an earlier session, or Available from an
+// earlier rejection. Calling ModelLister.ListModels to get a catalog for this
+// check does not avoid the cost on ACP: it creates and stops a session of its
+// own, which a persisting agent keeps in the same way. Call it once and reuse
+// the result rather than before every Start.
 type ModelNotSupportedError struct {
 	Model     string
 	Available []ModelInfo

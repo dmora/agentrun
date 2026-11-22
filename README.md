@@ -234,7 +234,9 @@ the agent offers no way to select a model, `Start` returns
 `ErrModelSelectionUnsupported` instead of ignoring `Session.Model`. Both errors
 come back after the agent has created the session, so check the model with
 `agentrun.ModelAvailable` against a catalog you already have if a leftover
-session matters to you.
+session matters to you. On ACP, `ListModels` is not a free way to get that
+catalog: it creates and stops a session of its own, so call it once and reuse
+the result rather than before every `Start`.
 `MessageInit.Init.Model` reports the model for new and resumed sessions. ACP
 emits `MessageInit` before it applies the selection: if the agent rejects it, a
 `MessageError` follows `MessageInit` and the agent stays on its previous model.

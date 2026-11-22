@@ -24,7 +24,9 @@ type Engine interface {
 // Engines that cannot enumerate models return ErrModelDiscoveryUnsupported.
 //
 // The session supplies the same CWD, environment, and backend options that
-// would be used by Start. Implementations must not run a model turn.
+// would be used by Start. Implementations must not run a model turn. They may
+// still create a backend session to read the catalog: the ACP engine does, and
+// an agent that persists sessions keeps it.
 type ModelLister interface {
 	ListModels(ctx context.Context, session Session) ([]ModelInfo, error)
 }
